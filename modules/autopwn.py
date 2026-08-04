@@ -40,6 +40,7 @@ from modules.deserializer import (
 )
 from modules.client_side import ClientSideAnalyzer
 from modules.php_tricks import PHPTricksEngine
+from modules.eval_injection import EvalInjectionEngine
 
 
 
@@ -331,6 +332,9 @@ class AutoPwnPipeline:
 
         # 9. PHP-Specific Logic, Type Juggling, Header Spoofing & Stream Wrappers
         self._exploit_php_tricks()
+
+        # 10. Eval / Code Injection RCE (Python eval, Node.js eval, PHP eval)
+        self._exploit_eval_injection()
 
 
     def _exploit_file_upload(self):
@@ -970,6 +974,25 @@ class AutoPwnPipeline:
             self.session, self.target_url, list(self.state.get("parameters", [])),
             lambda text, ctx: self._check_and_store_flags(text, ctx)
         )
+
+    def _exploit_eval_injection(self):
+        """Active server-side eval() / code injection RCE exploiter (Python, Node.js, PHP, Ruby)."""
+        rce_achieved = EvalInjectionEngine.detect_and_exploit(
+            session=self.session,
+            target_url=self.target_url,
+            forms=self.state.get("forms", []),
+            parameters=list(self.state.get("parameters", [])),
+            endpoints=list(self.state.get("endpoints", [])),
+            tech_stack=self.state.get("tech_stack", []),
+            flag_checker=lambda text, ctx: self._check_and_store_flags(text, ctx),
+            state=self.state,
+        )
+        if rce_achieved:
+            self._log_step("Phase 4: Exploitation", "Eval/Code Injection RCE achieved and flag extracted")
+            self.learning_engine.record_success(
+                self.target_url, self.state["tech_stack"], "eval_injection", "eval_rce",
+                "eval() code injection", list(self.state["captured_flags"])
+            )
 
     # =========================================================================
     # PHASE 5: تصعيد الصلاحيات وربط الثغرات (Privilege Escalation & Chaining Core)
