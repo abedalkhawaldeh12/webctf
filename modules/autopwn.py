@@ -880,6 +880,15 @@ class AutoPwnPipeline:
                         break
 
         # Always run these regardless of prediction (broad coverage)
+        # Cookie brute-force is a high-value vector that should ALWAYS run,
+        # even when the reasoner confirmed other (possibly false-positive) vulns.
+        # This fixes picoCTF-style cookie challenges (Cookies, Wily Courier).
+        if len(self.state.get("captured_flags", [])) == total_flags_before:
+            try:
+                self._exploit_cookie_brute_force()
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                print_warning(f"Cookie brute-force failed: {e}")
+
         self._exploit_client_side_crypto()
         self._exploit_reasoning_driven()
         # Execute the multi-stage reasoning plan (complex challenges)
