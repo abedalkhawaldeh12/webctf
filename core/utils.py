@@ -9,7 +9,7 @@ import requests
 from core.ui import print_flag, print_info
 
 FLAG_PATTERNS = [
-    r"(?:picoCTF|flag|ctf|htb|thm|cscg|ductf|seccon|hitcon|[a-zA-Z0-9_\-]{3,25})\{[a-zA-Z0-9_\-\.!@#%^&*+=~?]{4,100}\}", # Standard: flag{...}, CTF{...}, picoCTF{...}
+    r"(?:picoCTF|flag|ctf|htb|thm|cscg|ductf|seccon|hitcon|w3c|w3challs|auctf|uiuctf|bctf|pbjar|bcactf|rgbctf|csaw|dice|tjctf|damctf|nactf|dawgctf|n00bz|lactf)\{[a-zA-Z0-9_\-\.!@#%^&*+=~?]{4,100}\}", # Standard CTF formats
     r"FLAG:[a-zA-Z0-9_\-]{4,100}",                       # FLAG:xyz
     r"flag_[a-zA-Z0-9_\-]{6,100}",                       # flag_xyz
 ]
