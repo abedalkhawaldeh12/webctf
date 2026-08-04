@@ -202,6 +202,9 @@ class AutoPwnPipeline:
 
             print_info(f"Discovered [bold green]{len(self.state['endpoints'])}[/bold green] Endpoints, [bold green]{len(self.state['forms'])}[/bold green] Forms, [bold green]{len(self.state['scripts'])}[/bold green] Scripts, [bold green]{len(self.state['parameters'])}[/bold green] Input Parameters.")
 
+            # 4. Dummy Data Harvest (Form Interaction)
+            self._harvest_form_cookies()
+
         except Exception as e:
             print_error(f"Failed to connect to target URL: {e}")
             return
@@ -224,6 +227,60 @@ class AutoPwnPipeline:
                         self._check_and_store_flags(content, h["path"])
                     except Exception:
                         pass
+
+    # =========================================================================
+    # PHASE 1b: Dummy Data Harvest
+    # =========================================================================
+    def _harvest_form_cookies(self):
+        """Submit dummy data to all discovered forms to harvest hidden cookies (like JWTs)."""
+        forms = self.state.get("forms", [])
+        if not forms:
+            return
+
+        print_info(f"Initiating Dummy Data Harvest on {len(forms)} forms to uncover hidden state/cookies...")
+        for f in forms:
+            action = f.get("action", self.target_url)
+            method = f.get("method", "GET").upper()
+            inputs = f.get("inputs", [])
+            
+            # Prepare dummy payload
+            payload = {}
+            for i in inputs:
+                name = i.get("name")
+                if not name:
+                    continue
+                itype = i.get("type", "text")
+                if itype == "email":
+                    payload[name] = "test@example.com"
+                elif itype == "password":
+                    payload[name] = "password"
+                elif itype == "number":
+                    payload[name] = "1"
+                else:
+                    payload[name] = "testuser"
+
+            # Submit dummy data
+            try:
+                if method == "POST":
+                    r = self.session.post(action, data=payload, timeout=5, allow_redirects=False)
+                else:
+                    r = self.session.get(action, params=payload, timeout=5, allow_redirects=False)
+                
+                # Check for new cookies!
+                new_cookies = r.cookies.get_dict()
+                if new_cookies:
+                    added = {k: v for k, v in new_cookies.items() if k not in self.state["cookies"]}
+                    if added:
+                        print_success(f"  -> Harvested NEW Cookies from form submission: {', '.join(added.keys())}")
+                        self.state["cookies"].update(added)
+                        # Immediately check if we found a JWT
+                        for cname, cval in added.items():
+                            if cval.count(".") == 2:
+                                self.state["jwt_tokens"].append((cname, cval))
+                                print_success(f"  -> [bold cyan]JWT Token Harvested![/bold cyan] ({cname})")
+            except Exception:
+                pass
+
 
     # =========================================================================
     # PHASE 2: الفحص والتحليل الإحصائي (Scanning & Statistical Analysis)
