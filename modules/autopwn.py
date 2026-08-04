@@ -39,6 +39,7 @@ from modules.deserializer import (
     generate_nodejs_serialize_payload, generate_php_serialized_object
 )
 from modules.client_side import ClientSideAnalyzer
+from modules.php_tricks import PHPTricksEngine
 
 
 
@@ -327,6 +328,9 @@ class AutoPwnPipeline:
 
         # 8. Client-Side Cryptographic & Scrambled Binary / Image Reconstruction
         self._exploit_client_side_crypto()
+
+        # 9. PHP-Specific Logic, Type Juggling, Header Spoofing & Stream Wrappers
+        self._exploit_php_tricks()
 
 
     def _exploit_file_upload(self):
@@ -940,6 +944,32 @@ class AutoPwnPipeline:
                 pass
 
 
+
+    def _exploit_php_tricks(self):
+        """Active PHP Type Juggling, Header/IP Spoofing, Stream Wrappers and Verb Tampering."""
+        print_info("Testing PHP-Specific Logic & Type Juggling Vectors...")
+        
+        # 1. Test Form Type Juggling & Array Injection
+        for form in self.state.get("forms", []):
+            PHPTricksEngine.test_type_juggling_form(
+                self.session, form, lambda text, ctx: self._check_and_store_flags(text, ctx)
+            )
+
+        # 2. Test HTTP Header & IP Spoofing
+        PHPTricksEngine.test_header_spoofing(
+            self.session, self.target_url, lambda text, ctx: self._check_and_store_flags(text, ctx)
+        )
+
+        # 3. Test HTTP Verb Tampering
+        PHPTricksEngine.test_verb_tampering(
+            self.session, self.target_url, lambda text, ctx: self._check_and_store_flags(text, ctx)
+        )
+
+        # 4. Test PHP Stream Wrappers (php://input, data://, php://filter)
+        PHPTricksEngine.test_php_wrappers(
+            self.session, self.target_url, list(self.state.get("parameters", [])),
+            lambda text, ctx: self._check_and_store_flags(text, ctx)
+        )
 
     # =========================================================================
     # PHASE 5: تصعيد الصلاحيات وربط الثغرات (Privilege Escalation & Chaining Core)

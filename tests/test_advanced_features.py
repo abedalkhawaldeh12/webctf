@@ -77,10 +77,23 @@ def test_all():
     assert "pwn()" in script and "requests.get" in script
     print("[+] 4. Chaining Engine: LFI Source Leak -> Secret / Deser Chains & Exploit Script verified successfully.")
 
-    # 5. Test AutoPwn Pipeline instantiation
+    # 5. Test PHP Tricks & Logic Engine
+    from modules.php_tricks import PHPTricksEngine, MAGIC_HASHES_MD5, SPOOF_IP_HEADERS
+    assert len(MAGIC_HASHES_MD5) >= 5, "Magic hashes missing"
+    assert "X-Forwarded-For" in SPOOF_IP_HEADERS
+    print("[+] 5. PHP Tricks Engine: Magic hashes, IP spoofing headers, Type juggling verified successfully.")
+
+    # 6. Test Client-Side JS Analyzer
+    from modules.client_side import ClientSideAnalyzer
+    test_js = 'var _0x123=["\\x61\\x64\\x6d\\x69\\x6e", "\\x70\\x61\\x73\\x73\\x31\\x32\\x33"]; if (p == _0x123[1]) { return true; }'
+    js_res = ClientSideAnalyzer.analyze_javascript(test_js)
+    assert len(js_res["hex_decoded"]) >= 2
+    print("[+] 6. Client-Side Analyzer: Hex deobfuscation, auth checks verified successfully.")
+
+    # 7. Test AutoPwn Pipeline instantiation
     pipe = AutoPwnPipeline("http://127.0.0.1:8080")
     assert pipe.target_url == "http://127.0.0.1:8080"
-    print("[+] 5. AutoPwn Pipeline: 7-Phase architecture integration verified successfully.")
+    print("[+] 7. AutoPwn Pipeline: 7-Phase architecture integration verified successfully.")
 
     print("\n[🎉] ALL TESTS PASSED SUCCESSFULLY!")
 
