@@ -428,7 +428,7 @@ class IntelligenceEngine:
             score += int(confidence * 50)
 
             # High-impact vuln types
-            high_impact = ["rce", "cmd_inj", "sqli", "deserialization", "file_upload", "graphql", "idor", "race_condition", "smuggling", "mass_assignment", "zip_slip", "ssi", "latex"]
+            high_impact = ["rce", "cmd_inj", "sqli", "deserialization", "file_upload", "graphql", "idor", "race_condition", "smuggling", "mass_assignment", "zip_slip", "ssi", "latex", "md5_id_bruteforce"]
             if vtype in high_impact:
                 score += 30
                 reasons.append("High-impact vulnerability type")

