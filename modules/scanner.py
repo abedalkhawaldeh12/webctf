@@ -187,18 +187,20 @@ def extract_forms_and_links(html_text: str, base_url: str) -> Dict[str, Any]:
     # 3. Extract <form> elements
     form_blocks = re.findall(r'<form(.*?)>(.*?)</form>', html_text, re.DOTALL | re.IGNORECASE)
     for form_attr, form_body in form_blocks:
-        action_match = re.search(r'action=["\'](.*?)["\']', form_attr, re.IGNORECASE)
-        method_match = re.search(r'method=["\'](.*?)["\']', form_attr, re.IGNORECASE)
+        action_match = re.search(r'action=["\']([^"\']*?)["\']', form_attr, re.IGNORECASE)
+        method_match = re.search(r'method=["\']([^"\']*?)["\']', form_attr, re.IGNORECASE)
+        form_id_match = re.search(r'id=["\']([^"\']*?)["\']', form_attr, re.IGNORECASE)
         
         action = urljoin(base_url, action_match.group(1).strip()) if action_match else base_url
-        method = method_match.group(1).upper() if method_match else "GET"
+        method = method_match.group(1).upper() if method_match else "POST"  # Default POST (most auth/CTF forms)
+        form_id = form_id_match.group(1) if form_id_match else None
         
         inputs = []
         for inp in re.finditer(r'<input\s+([^>]*?)>', form_body, re.IGNORECASE):
             attrs = inp.group(1)
-            name_m = re.search(r'name=["\'](.*?)["\']', attrs, re.IGNORECASE)
-            type_m = re.search(r'type=["\'](.*?)["\']', attrs, re.IGNORECASE)
-            val_m = re.search(r'value=["\'](.*?)["\']', attrs, re.IGNORECASE)
+            name_m = re.search(r'name=["\']([^"\']*?)["\']', attrs, re.IGNORECASE)
+            type_m = re.search(r'type=["\']([^"\']*?)["\']', attrs, re.IGNORECASE)
+            val_m = re.search(r'value=["\']([^"\']*?)["\']', attrs, re.IGNORECASE)
             if name_m:
                 inputs.append({
                     "name": name_m.group(1),
@@ -208,7 +210,7 @@ def extract_forms_and_links(html_text: str, base_url: str) -> Dict[str, Any]:
                 parameters.add(name_m.group(1))
 
         # Textarea
-        for ta in re.finditer(r'<textarea\s+([^>]*?)name=["\'](.*?)["\']', form_body, re.IGNORECASE):
+        for ta in re.finditer(r'<textarea\s+([^>]*?)name=["\']([^"\']*?)["\']', form_body, re.IGNORECASE):
             name = ta.group(2)
             inputs.append({"name": name, "type": "textarea", "value": ""})
             parameters.add(name)
@@ -216,8 +218,29 @@ def extract_forms_and_links(html_text: str, base_url: str) -> Dict[str, Any]:
         forms.append({
             "action": action,
             "method": method,
-            "inputs": inputs
+            "inputs": inputs,
+            "id": form_id
         })
+
+    # 4. Detect JavaScript-based form submissions
+    # Pattern: initAuthForm('form-id', '/auth/login') or similar
+    for js_init in re.findall(r"initAuthForm\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)", html_text):
+        form_id_js, endpoint_js = js_init
+        full_endpoint = urljoin(base_url, endpoint_js)
+        # Update matching form's action and ensure method is POST (fetch uses POST)
+        for f in forms:
+            if f.get("id") == form_id_js:
+                f["action"] = full_endpoint
+                f["method"] = "POST"
+                break
+
+    # Pattern: fetch('/endpoint', { method: 'POST', ... }) in inline scripts
+    for inline in inline_scripts:
+        fetch_matches = re.findall(r"fetch\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*\{[^}]*method\s*:\s*['\"](\w+)['\"]", inline, re.DOTALL)
+        for fetch_url, fetch_method in fetch_matches:
+            full_fetch = urljoin(base_url, fetch_url)
+            if full_fetch not in [f["action"] for f in forms]:
+                links.add(full_fetch)
 
     return {
         "links": list(links),
