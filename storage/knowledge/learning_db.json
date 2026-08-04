@@ -4,8 +4,8 @@
     "total_solved_challenges": 17,
     "total_captured_flags": 20,
     "successful_exploits": 22,
-    "last_learning_update": "2026-08-04 14:56:21",
-    "failed_attempts": 9
+    "last_learning_update": "2026-08-04 15:00:07",
+    "failed_attempts": 10
   },
   "technologies": {
     "flask/werkzeug": {
@@ -288,6 +288,18 @@
         "xss_to_admin"
       ],
       "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://wily-courier.picoctf.net:51748/",
+      "timestamp": "2026-08-04 15:00:07",
+      "technologies": [
+        "Python",
+        "Flask/Werkzeug"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
     }
   ],
   "platform_stats": {
@@ -310,7 +322,7 @@
   "vuln_type_stats": {
     "xss_to_admin": {
       "successes": 0,
-      "failures": 9
+      "failures": 10
     }
   }
 }

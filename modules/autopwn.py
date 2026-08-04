@@ -622,10 +622,25 @@ class AutoPwnPipeline:
         # into it. If the deep-dive doesn't yield a flag, fall back and try
         # the NEXT vector. Keep going until a flag is found or all vectors
         # are exhausted.
-        flags_before = set(self.state["captured_flags"])
+        total_flags_before = len(self.state.get("captured_flags", []))
+
+        # 1. Fast-Track: If flag was already captured in Phase 3
+        if total_flags_before > 0:
+            print_success("[bold green]Flag already captured in Phase 3! Skipping blind exploitation spray.[/bold green]")
+            return
+
+        # 2. Fast-Track: If Reasoner confirmed a vulnerability (e.g. Auth Bypass)
+        ctf_confirmed = self.state.get("ctf_confirmed", [])
+        if ctf_confirmed:
+            print_success("[bold yellow]Reasoner confirmed a vulnerability! Skipping blind payload spraying to pivot to authenticated surface.[/bold yellow]")
+            for res in ctf_confirmed:
+                if "exploit" in res:
+                    print_info(f"  -> Confirmed: {res['exploit']}")
+            return
+
         for vc in run_order:
-            # If we already captured a flag from a previous vector, we're done
-            if self.state["captured_flags"] - flags_before:
+            # If we captured a new flag from a previous vector, we're done
+            if len(self.state.get("captured_flags", [])) > total_flags_before:
                 print_success(f"[bold green]Flag captured via '{vc}'! Stopping further exploitation.[/bold green]")
                 break
 
@@ -647,7 +662,7 @@ class AutoPwnPipeline:
 
                 # ── FALLBACK: If deep-dive didn't find a flag, clear RCE
                 #    and continue trying OTHER vectors (human behavior) ──
-                if not (self.state["captured_flags"] - flags_before):
+                if len(self.state.get("captured_flags", [])) == total_flags_before:
                     print_warning(f"[bold yellow]Deep-dive on '{vc}' yielded no flag. Falling back to other vectors...[/bold yellow]")
                     self.state["active_rce_method"] = None
                     self._log_step(
