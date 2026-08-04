@@ -20,6 +20,8 @@ ENV/
 scratch/
 scratch_*.py
 test_ssti*.py
+!test_ssti.py
+!test_ssti_exploit.py
 
 # Storage & Loot (keep folder structure with .gitkeep)
 storage/loot/*
