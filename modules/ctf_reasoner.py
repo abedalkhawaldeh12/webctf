@@ -413,7 +413,6 @@ class CTFReasoner:
                 observations=[o.detail for o in jwt_cookies],
                 exploit="JWT alg:none or secret brute-force"
             ))
-
         # ── H4: Serialized cookie -> deserialization ───────────────────
         serialized_cookies = [
             o for o in self.observations
@@ -427,6 +426,22 @@ class CTFReasoner:
                 confidence=0.85,
                 observations=[o.detail for o in serialized_cookies],
                 exploit="Deserialization RCE"
+            ))
+
+        # ── H4b: Simple cookie -> cookie manipulation & brute-force ───
+        simple_cookies = [
+            o for o in self.observations
+            if o.category == "cookie" and not any(k in o.detail.lower() for k in ["jwt", "session", "serialized", "encrypted", "json"])
+        ]
+        if simple_cookies or self.state.get("cookies"):
+            cookie_names = list(self.state.get("cookies", {}).keys())
+            self.hypotheses.append(Hypothesis(
+                title="Cookie Manipulation - Parametric Brute-Force",
+                logic="The application uses simple cookies (like name, id, user_id). We can brute-force numeric values or common roles (admin, guest) to access privileged responses.",
+                test="Iterate through numeric values (0 to 50) and common values for the cookies, then inspect the responses for flags.",
+                confidence=0.8,
+                observations=[f"Simple cookies detected: {', '.join(cookie_names)}" if cookie_names else "Cookies observed in session"],
+                exploit="Iterate cookie values to find flag"
             ))
 
         # ── H5: Login form -> auth bypass ──────────────────────────────

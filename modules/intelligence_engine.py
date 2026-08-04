@@ -434,7 +434,7 @@ class IntelligenceEngine:
                 reasons.append("High-impact vulnerability type")
 
             # Medium-impact
-            medium_impact = ["ssti", "lfi", "ssrf", "xxe", "jwt", "auth_bypass", "cors", "open_redirect", "hpp", "crlf", "csrf", "ldap", "web_cache", "dom_clobbering", "oauth", "csv_injection", "clickjacking", "dns_rebinding", "tabnabbing", "css_injection", "xslt", "xs_leak"]
+            medium_impact = ["ssti", "lfi", "ssrf", "xxe", "jwt", "auth_bypass", "cors", "open_redirect", "hpp", "crlf", "csrf", "ldap", "web_cache", "dom_clobbering", "oauth", "csv_injection", "clickjacking", "dns_rebinding", "tabnabbing", "css_injection", "xslt", "xs_leak", "cookie_manipulation"]
             if vtype in medium_impact:
                 score += 20
                 reasons.append("Medium-impact vulnerability type")
