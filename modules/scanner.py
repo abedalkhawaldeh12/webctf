@@ -4,11 +4,36 @@ Probes common CTF source leaks (.git, .env, backups) and scrapes flags from head
 """
 
 import concurrent.futures
+import os
 import requests
 import re
 from typing import List, Dict, Tuple, Optional, Any
 from core.ui import print_table, print_success, print_info, print_warning, print_error, print_flag
 from core.utils import find_flags
+
+# Linux/Kali standard wordlist paths for directory/content discovery
+LINUX_DIR_WORDLIST_PATHS = [
+    "/usr/share/dirb/wordlists/common.txt",
+    "/usr/share/dirb/wordlists/big.txt",
+    "/usr/share/dirbuster/wordlists/directory-list-2.3-medium.txt",
+    "/usr/share/seclists/Discovery/Web-Content/common.txt",
+    "/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt",
+    "/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt",
+    "/usr/share/wordlists/dirb/common.txt",
+]
+
+def load_dir_wordlist() -> List[str]:
+    """Load a directory wordlist from Linux standard paths. Falls back to CTF_SENSITIVE_PATHS."""
+    for candidate in LINUX_DIR_WORDLIST_PATHS:
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8", errors="ignore") as f:
+                    words = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+                if words:
+                    return words
+            except Exception:
+                continue
+    return CTF_SENSITIVE_PATHS
 
 CTF_SENSITIVE_PATHS = [
     # Information & Search Engines
@@ -73,6 +98,56 @@ CTF_SENSITIVE_PATHS = [
     "graphql",
 ]
 
+def _fast_dir_scan(base_url: str, wordlist: List[str], max_workers: int = 10) -> List[Dict[str, Any]]:
+    """Fast directory scan using external tools (ffuf/gobuster) when available.
+    Falls back to concurrent Python requests ONLY if external tools are unavailable."""
+    # Try external tools first (much faster: 40 threads vs 8)
+    external_ran = False
+    try:
+        from modules.external_tools import ExternalTools
+        tools = ExternalTools(timeout=45)
+        wordlist_path = None
+        # Find the wordlist file path (we have the loaded list; find matching file)
+        for candidate in LINUX_DIR_WORDLIST_PATHS:
+            if os.path.isfile(candidate):
+                wordlist_path = candidate
+                break
+
+        if tools.ffuf_available and wordlist_path:
+            print_info("Using [bold green]ffuf[/bold green] for fast directory discovery...")
+            results = tools.run_ffuf(base_url, wordlist_path, threads=40, max_time=45)
+            external_ran = True
+            if results:
+                return results
+        if tools.gobuster_available and wordlist_path:
+            print_info("Using [bold green]gobuster[/bold green] for fast directory discovery...")
+            results = tools.run_gobuster(base_url, wordlist_path, threads=20, max_time=45)
+            external_ran = True
+            if results:
+                return results
+    except Exception:
+        pass
+
+    # If external tools ran successfully (even with 0 hits), trust their result.
+    # Only fall back to slow Python scan if external tools were NOT available.
+    if external_ran:
+        return []
+
+    # Fallback: concurrent Python requests (only when no external tool available)
+    print_info("External tools unavailable, using concurrent Python scan...")
+    dir_hits = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(check_endpoint, base_url, p): p for p in wordlist}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res and (res["is_hit"] or res["status"] in [200, 301, 302]):
+                dir_hits.append(res)
+                if res["flags"]:
+                    for f in res["flags"]:
+                        print_flag(f)
+    return dir_hits
+
+
 def check_endpoint(base_url: str, path: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
     """Check if single endpoint exists and scan for flags."""
     target = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
@@ -103,6 +178,57 @@ def check_endpoint(base_url: str, path: str, timeout: int = 5) -> Optional[Dict[
     except Exception:
         pass
     return None
+
+def parse_robots_txt(base_url: str) -> List[str]:
+    """Fetch robots.txt and extract hidden paths (including base64-encoded ones).
+    robots.txt is a critical CTF hint source - it often reveals hidden files/dirs."""
+    import base64 as _b64
+    hidden_paths = []
+    robots_url = f"{base_url.rstrip('/')}/robots.txt"
+    try:
+        r = requests.get(robots_url, timeout=5, verify=False, headers={
+            "User-Agent": "Mozilla/5.0 (CTF-Recon/1.0)"
+        })
+        if r.status_code != 200:
+            return hidden_paths
+        text = r.text
+        print_info(f"[bold yellow]robots.txt found! Parsing for hidden paths...[/bold yellow]")
+
+        # 1. Extract Disallow paths
+        for m in re.finditer(r"Disallow\s*:\s*(\S+)", text, re.IGNORECASE):
+            path = m.group(1).strip().strip('"').strip("'")
+            if path and path != "/" and not path.startswith("#"):
+                # Filter out paths with query strings, wildcards, or semicolons
+                if not any(c in path for c in "?*;"):
+                    hidden_paths.append(path.lstrip("/"))
+
+        # 2. Extract base64-encoded strings (common CTF trick)
+        for b64 in re.findall(r"[A-Za-z0-9+/]{8,}={0,2}", text):
+            # Skip obvious non-base64 words (like "User-agent", "Disallow")
+            if b64.lower() in ("user-agent", "disallow", "allow", "sitemap"):
+                continue
+            try:
+                # Pad if needed
+                padded = b64 + "=" * ((4 - len(b64) % 4) % 4)
+                decoded = _b64.b64decode(padded).decode("utf-8", errors="ignore")
+                # Only keep if it looks like a path (contains / or . or is a filename)
+                if decoded and (("/" in decoded) or ("." in decoded) or decoded.endswith((".txt", ".php", ".html", ".js", ".bak", ".zip", ".sql"))):
+                    if decoded not in hidden_paths:
+                        hidden_paths.append(decoded)
+                        print_info(f"[bold cyan]Decoded base64 path from robots.txt:[/bold cyan] [green]{decoded}[/green]")
+            except Exception:
+                continue
+
+        # 3. Extract any other suspicious tokens (semicolon-separated, etc.)
+        for token in re.findall(r"[\w./\-]+\.(?:txt|php|html|js|bak|zip|sql|log|conf|env|git|json|xml)", text):
+            if token not in hidden_paths and not any(c in token for c in "?*;"):
+                hidden_paths.append(token)
+
+        if hidden_paths:
+            print_info(f"[bold green]Extracted {len(hidden_paths)} hidden paths from robots.txt[/bold green]")
+    except Exception as e:
+        print_warning(f"Could not parse robots.txt: {e}")
+    return hidden_paths
 
 def scan_target(base_url: str, max_workers: int = 10, flag_prefix: Optional[str] = None) -> List[Dict[str, Any]]:
     """Run concurrent quick scan against target CTF web challenge."""
@@ -136,10 +262,18 @@ def scan_target(base_url: str, max_workers: int = 10, flag_prefix: Optional[str]
     except Exception as e:
         print_warning(f"Could not fetch root page: {e}")
 
+    # 1b. Parse robots.txt for hidden paths (CRITICAL CTF hint source)
+    robots_paths = parse_robots_txt(base_url)
+
     # 2. Concurrently Probe Sensitive Paths
     hits = []
+    # Combine CTF_SENSITIVE_PATHS with robots.txt-discovered paths
+    probe_paths = list(CTF_SENSITIVE_PATHS)
+    for rp in robots_paths:
+        if rp not in probe_paths:
+            probe_paths.append(rp)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(check_endpoint, base_url, p): p for p in CTF_SENSITIVE_PATHS}
+        futures = {executor.submit(check_endpoint, base_url, p): p for p in probe_paths}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res and (res["is_hit"] or res["status"] in [200, 301, 302]):
@@ -147,7 +281,19 @@ def scan_target(base_url: str, max_workers: int = 10, flag_prefix: Optional[str]
                 if res["flags"]:
                     for f in res["flags"]:
                         print_flag(f)
-                        
+
+    # 3. Directory/Content Discovery using Linux wordlists (if available)
+    dir_wordlist = load_dir_wordlist()
+    if dir_wordlist and dir_wordlist is not CTF_SENSITIVE_PATHS:
+        print_info(f"Running directory discovery with {len(dir_wordlist)} entries from wordlist...")
+        dir_hits = _fast_dir_scan(base_url, dir_wordlist, max_workers)
+        # Merge directory hits (dedupe by path)
+        seen = {h["path"] for h in hits}
+        for h in dir_hits:
+            if h["path"] not in seen:
+                hits.append(h)
+                seen.add(h["path"])
+
     # Sort hits by status code then length
     hits.sort(key=lambda x: (x["status"], -x["length"]))
     return hits

