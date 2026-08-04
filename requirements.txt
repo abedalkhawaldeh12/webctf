@@ -1,0 +1,5 @@
+# Core dependencies for WebCTF Suite
+requests>=2.31.0
+rich>=13.7.0
+pyjwt>=2.8.0
+cryptography>=42.0.0

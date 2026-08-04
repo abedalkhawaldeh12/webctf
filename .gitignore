@@ -1,0 +1,34 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Images and artifacts
+*.png
+*.jpg
+*.jpeg
+
+# Environments
+env/
+venv/
+ENV/
+.venv/
+
+# Scratch & test scripts
+scratch/
+scratch_*.py
+test_ssti*.py
+
+# Storage & Loot (keep folder structure with .gitkeep)
+storage/loot/*
+storage/sessions/*
+!storage/loot/.gitkeep
+!storage/sessions/.gitkeep
+
+# Logs and IDE files
+*.log
+.vscode/
+.idea/
+.DS_Store
