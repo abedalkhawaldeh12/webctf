@@ -9,7 +9,7 @@ import requests
 from core.ui import print_flag, print_info
 
 FLAG_PATTERNS = [
-    r"(?:picoCTF|flag|ctf|htb|thm|cscg|ductf|seccon|hitcon|w3c|w3challs|auctf|uiuctf|bctf|pbjar|bcactf|rgbctf|csaw|dice|tjctf|damctf|nactf|dawgctf|n00bz|lactf)\{[a-zA-Z0-9_\-\.!@#%^&*+=~?]{4,100}\}", # Standard CTF formats
+    r"(?:picoCTF|flag|ctf|htb|thm|cscg|ductf|seccon|hitcon|w3c|w3challs|auctf|uiuctf|bctf|pbjar|bcactf|rgbctf|csaw|dice|tjctf|damctf|nactf|dawgctf|n00bz|lactf|[a-zA-Z0-9_\-]{3,25})\{[a-zA-Z0-9_\-\.!@#%^&*+=~?]{4,100}\}", # Standard CTF formats
     r"FLAG:[a-zA-Z0-9_\-]{4,100}",                       # FLAG:xyz
     r"flag_[a-zA-Z0-9_\-]{6,100}",                       # flag_xyz
 ]
@@ -27,6 +27,22 @@ def find_flags(text: str, custom_prefix: Optional[str] = None) -> List[str]:
             # Filter out obvious false positives like programming macros or variable templates
             if m.startswith("AX_CHECK_") or "{$" in m or m.startswith("features{") or m.startswith("ENV{"):
                 continue
+            
+            # Filter out programming/code constructs that might match the generic pattern
+            if "{" in m:
+                prefix = m.split("{")[0].lower()
+                code_keywords = {
+                    "if", "else", "for", "while", "do", "try", "catch", "finally", "switch", 
+                    "function", "class", "struct", "enum", "return", "yield", "break", "continue", 
+                    "pass", "def", "lambda", "async", "await", "let", "var", "const", "auto", "int", 
+                    "char", "bool", "float", "double", "void", "public", "private", "protected", 
+                    "static", "new", "delete", "this", "super", "sizeof", "typeof", "body", "div", 
+                    "span", "html", "head", "style", "script", "app", "main", "math", "json", "object",
+                    "array", "string", "number", "boolean", "date", "regexp", "error", "window", "document"
+                }
+                if prefix in code_keywords:
+                    continue
+
             if m not in flags:
                 flags.append(m)
     return flags
