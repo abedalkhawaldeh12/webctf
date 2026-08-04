@@ -3800,10 +3800,10 @@ class AutoPwnPipeline:
         else:
             print_warning("No clear CTF flags captured yet. Review leaked source files in storage/loot/.")
 
-        # 3. Print Visual Attack Path Timeline
-        if self.state["attack_steps"]:
-            rows = [[s["timestamp"], s["phase"], s["description"]] for s in self.state["attack_steps"]]
-            print_table(["Time", "Offensive Phase", "Action & Exploited Step"], rows, title="Attack Path Graph & Timeline")
+        # 3. Attack Path Timeline (saved to loot, not printed to console)
+        # if self.state["attack_steps"]:
+        #     rows = [[s["timestamp"], s["phase"], s["description"]] for s in self.state["attack_steps"]]
+        #     print_table(["Time", "Offensive Phase", "Action & Exploited Step"], rows, title="Attack Path Graph & Timeline")
 
     # =========================================================================
     # PERSISTENCE & MEMORY UPDATE
