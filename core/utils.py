@@ -43,9 +43,18 @@ def check_and_print_flags(text: str, prefix: Optional[str] = None) -> bool:
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 def make_session(proxy: Optional[str] = None, headers: Optional[dict] = None) -> requests.Session:
-    """Create a configured requests session."""
+    """Create a configured requests session with retries."""
     session = requests.Session()
+    
+    # Configure retries
+    retries = Retry(total=3, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
     session.verify = False
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WebCTF-Tool/1.0"

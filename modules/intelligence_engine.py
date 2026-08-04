@@ -428,13 +428,13 @@ class IntelligenceEngine:
             score += int(confidence * 50)
 
             # High-impact vuln types
-            high_impact = ["rce", "cmd_inj", "sqli", "deserialization", "file_upload"]
+            high_impact = ["rce", "cmd_inj", "sqli", "deserialization", "file_upload", "graphql", "idor", "race_condition", "smuggling", "mass_assignment", "zip_slip", "ssi", "latex"]
             if vtype in high_impact:
                 score += 30
                 reasons.append("High-impact vulnerability type")
 
             # Medium-impact
-            medium_impact = ["ssti", "lfi", "ssrf", "xxe", "jwt", "auth_bypass"]
+            medium_impact = ["ssti", "lfi", "ssrf", "xxe", "jwt", "auth_bypass", "cors", "open_redirect", "hpp", "crlf", "csrf", "ldap", "web_cache", "dom_clobbering", "oauth", "csv_injection", "clickjacking", "dns_rebinding", "tabnabbing", "css_injection", "xslt", "xs_leak"]
             if vtype in medium_impact:
                 score += 20
                 reasons.append("Medium-impact vulnerability type")

