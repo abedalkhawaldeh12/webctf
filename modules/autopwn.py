@@ -1198,18 +1198,32 @@ class AutoPwnPipeline:
             full_ep = urljoin(self.target_url, ep)
             if full_ep not in endpoints_to_try:
                 endpoints_to_try.append(full_ep)
-        # Always include /check if not already present (common picoCTF cookie challenge endpoint)
+        # Always include /check and /search if not already present (common picoCTF cookie challenge endpoints)
         check_ep = urljoin(self.target_url, "/check")
         if check_ep not in endpoints_to_try:
             endpoints_to_try.append(check_ep)
+        search_ep = urljoin(self.target_url, "/search")
+        if search_ep not in endpoints_to_try:
+            endpoints_to_try.append(search_ep)
 
-        # Priority sort: endpoints containing 'check', 'admin', 'cookie', or '/search'
-        endpoints_to_try.sort(key=lambda x: any(k in x.lower() for k in ["check", "admin", "cookie", "search"]), reverse=True)
+        # Priority sort: /search and /check FIRST (most likely for cookie challenges),
+        # then other cookie-related endpoints, then the rest.
+        # This ensures we hit the correct endpoint before the time budget runs out.
+        def _ep_priority(ep):
+            el = ep.lower()
+            if "search" in el:
+                return 0
+            if "check" in el:
+                return 1
+            if any(k in el for k in ["cookie", "admin", "query", "find", "lookup"]):
+                return 2
+            return 3
+        endpoints_to_try.sort(key=_ep_priority)
 
         # Global time budget to prevent the brute-force from hanging forever
         import time as _time
         bf_start = _time.time()
-        MAX_BF_SECONDS = 90  # hard cap on total brute-force time
+        MAX_BF_SECONDS = 300  # 5 min hard cap on total brute-force time
 
         for cname in cookie_names:
             # Only brute-force cookies that look like parameter properties, not Flask sessions or JWTs
