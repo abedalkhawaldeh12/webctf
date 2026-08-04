@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional, Tuple, List
 DEFAULT_SECRET_WORDLIST = [
     "secret", "jwt", "password", "123456", "admin", "root", "key", "supersecret",
     "12345678", "qwerty", "test", "master", "iloveyou", "welcome", "flag",
-    "ctf", "secretkey", "jwtsecret", "token", "auth", "api_secret", "private"
+    "ctf", "secretkey", "jwtsecret", "token", "auth", "api_secret", "private", "ilovepico", "picoctf"
 ]
 
 # Linux/Kali standard wordlist paths (auto-detected)

