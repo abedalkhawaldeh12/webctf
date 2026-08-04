@@ -152,7 +152,7 @@ class AutoPwnPipeline:
         
         # 1. Fetch Root Page
         try:
-            r = self.session.get(self.target_url, timeout=7)
+            r = self.session.get(self.target_url, timeout=15)
             self.state["endpoints"].add(self.target_url)
             self.state["baseline_html"] = r.text
             self._check_and_store_flags(r.text, "Root Web Page")
@@ -291,7 +291,7 @@ class AutoPwnPipeline:
         # 1. Baseline Response Measurement & Semantic Diagnostic Check
         try:
             t0 = time.time()
-            base_resp = self.session.get(self.target_url, timeout=5)
+            base_resp = self.session.get(self.target_url, timeout=15)
             base_time = time.time() - t0
             base_len = len(base_resp.content)
             print_info(f"Baseline Profile: Status {base_resp.status_code} | Length: {base_len} bytes | Latency: {base_time:.2f}s")

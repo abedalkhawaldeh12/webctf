@@ -148,7 +148,7 @@ def _fast_dir_scan(base_url: str, wordlist: List[str], max_workers: int = 10) ->
     return dir_hits
 
 
-def check_endpoint(base_url: str, path: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
+def check_endpoint(base_url: str, path: str, timeout: int = 15) -> Optional[Dict[str, Any]]:
     """Check if single endpoint exists and scan for flags."""
     target = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
     try:
@@ -186,7 +186,7 @@ def parse_robots_txt(base_url: str) -> List[str]:
     hidden_paths = []
     robots_url = f"{base_url.rstrip('/')}/robots.txt"
     try:
-        r = requests.get(robots_url, timeout=5, verify=False, headers={
+        r = requests.get(robots_url, timeout=15, verify=False, headers={
             "User-Agent": "Mozilla/5.0 (CTF-Recon/1.0)"
         })
         if r.status_code != 200:
@@ -237,7 +237,7 @@ def scan_target(base_url: str, max_workers: int = 10, flag_prefix: Optional[str]
     
     # 1. Check Root Page & Extract Comments / Headers
     try:
-        root_resp = requests.get(base_url, timeout=5)
+        root_resp = requests.get(base_url, timeout=15)
         root_flags = find_flags(root_resp.text, flag_prefix)
         
         # Check comments
