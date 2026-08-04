@@ -40,25 +40,46 @@ class LearningEngine:
 
     def _load_db(self) -> Dict[str, Any]:
         """Load learning DB or initialize default template."""
-        if os.path.isfile(self.db_path):
-            try:
-                with open(self.db_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        
         default_db = {
-            "version": "1.0",
+            "version": "2.0",
             "stats": {
                 "total_solved_challenges": 0,
                 "total_captured_flags": 0,
                 "successful_exploits": 0,
+                "failed_attempts": 0,
                 "last_learning_update": None
             },
             "technologies": {},     # e.g. "jinja2": {"ssti": {"lipsum_rce": {"weight": 5, "payload": ...}}}
             "payload_weights": {},  # e.g. "lfi:php://filter...": 4
-            "successful_chains": [] # History of successful multi-stage attack chains
+            "successful_chains": [], # History of successful multi-stage attack chains
+            "failed_challenges": [], # History of failed challenge attempts for learning
+            "platform_stats": {},    # Per-platform success statistics
+            "vuln_type_stats": {}    # Per-vulnerability-type success statistics
         }
+
+        if os.path.isfile(self.db_path):
+            try:
+                with open(self.db_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                # Merge existing data with default schema to handle upgrades
+                merged = dict(default_db)
+                merged.update(existing)
+                # Keep schema version from default (latest)
+                merged["version"] = default_db["version"]
+                # Ensure nested structures exist
+                for key in ["stats", "technologies", "payload_weights", "successful_chains",
+                            "failed_challenges", "platform_stats", "vuln_type_stats"]:
+                    if key not in merged or merged[key] is None:
+                        merged[key] = default_db[key]
+                # Ensure stats sub-keys exist
+                for skey, sval in default_db["stats"].items():
+                    if skey not in merged["stats"]:
+                        merged["stats"][skey] = sval
+                self._save_db(merged)
+                return merged
+            except Exception:
+                pass
+
         self._save_db(default_db)
         return default_db
 
@@ -145,6 +166,170 @@ class LearningEngine:
 
         self._save_db()
 
+    def record_failure(
+        self,
+        target_url: str,
+        tech_stack: Any,
+        vuln_types: List[str],
+        reason: str = ""
+    ):
+        """
+        Record a failed challenge attempt. Used to track which techniques
+        need improvement and to avoid repeating ineffective approaches.
+        """
+        tech_list = list(tech_stack) if isinstance(tech_stack, (set, list, tuple)) else [str(tech_stack)]
+        self.data["stats"]["failed_attempts"] = self.data["stats"].get("failed_attempts", 0) + 1
+        self.data["stats"]["last_learning_update"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Record failed challenge
+        self.data["failed_challenges"].append({
+            "target": target_url,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "technologies": tech_list,
+            "vuln_types": vuln_types,
+            "reason": reason
+        })
+        # Keep last 200 failures
+        if len(self.data["failed_challenges"]) > 200:
+            self.data["failed_challenges"] = self.data["failed_challenges"][-200:]
+
+        # Track per-vuln-type failure stats
+        for v in vuln_types:
+            vkey = v.lower().strip()
+            if not vkey:
+                continue
+            if vkey not in self.data["vuln_type_stats"]:
+                self.data["vuln_type_stats"][vkey] = {"successes": 0, "failures": 0}
+            self.data["vuln_type_stats"][vkey]["failures"] += 1
+
+        self._save_db()
+
+    def record_platform_result(
+        self,
+        platform: str,
+        success: bool,
+        vuln_types: List[str]
+    ):
+        """
+        Track per-platform success/failure statistics.
+        Helps identify which platforms the tool handles well vs poorly.
+        """
+        pkey = platform.lower().strip()
+        if not pkey:
+            return
+        if pkey not in self.data["platform_stats"]:
+            self.data["platform_stats"][pkey] = {
+                "total": 0,
+                "successes": 0,
+                "failures": 0,
+                "vuln_types": {}
+            }
+        self.data["platform_stats"][pkey]["total"] += 1
+        if success:
+            self.data["platform_stats"][pkey]["successes"] += 1
+        else:
+            self.data["platform_stats"][pkey]["failures"] += 1
+
+        for v in vuln_types:
+            vkey = v.lower().strip()
+            if not vkey:
+                continue
+            if vkey not in self.data["platform_stats"][pkey]["vuln_types"]:
+                self.data["platform_stats"][pkey]["vuln_types"][vkey] = {"successes": 0, "failures": 0}
+            if success:
+                self.data["platform_stats"][pkey]["vuln_types"][vkey]["successes"] += 1
+            else:
+                self.data["platform_stats"][pkey]["vuln_types"][vkey]["failures"] += 1
+
+        self._save_db()
+
+    def get_recommendations(self, tech_stack: List[str], vuln_types: List[str]) -> List[Dict[str, Any]]:
+        """
+        Generate actionable recommendations based on learned experience.
+        Returns a list of recommendations with priority levels.
+        """
+        recommendations = []
+        tech_list = [t.lower().strip() for t in tech_stack if t and t.strip()]
+
+        for v in vuln_types:
+            vkey = v.lower().strip()
+            if not vkey:
+                continue
+
+            # Check if we have learned payloads for this vuln type
+            learned_payloads = []
+            for tech in tech_list:
+                if tech in self.data["technologies"]:
+                    if vkey in self.data["technologies"][tech]:
+                        for pname, pdata in self.data["technologies"][tech][vkey].items():
+                            learned_payloads.append({
+                                "name": pname,
+                                "payload": pdata.get("payload", ""),
+                                "weight": pdata.get("weight", 1),
+                                "tech": tech
+                            })
+
+            if learned_payloads:
+                # Sort by weight
+                learned_payloads.sort(key=lambda x: x["weight"], reverse=True)
+                top = learned_payloads[:3]
+                recommendations.append({
+                    "vuln_type": vkey,
+                    "priority": "high",
+                    "message": f"Use learned payloads for {vkey}",
+                    "payloads": top
+                })
+            else:
+                # No learned payloads - suggest standard approach
+                recommendations.append({
+                    "vuln_type": vkey,
+                    "priority": "medium",
+                    "message": f"No learned payloads for {vkey} yet - use standard techniques",
+                    "payloads": []
+                })
+
+        # Check platform stats for weak areas
+        for pkey, pdata in self.data.get("platform_stats", {}).items():
+            if pdata.get("total", 0) >= 2 and pdata.get("successes", 0) == 0:
+                recommendations.append({
+                    "vuln_type": "platform",
+                    "priority": "low",
+                    "message": f"Platform '{pkey}' has {pdata['total']} attempts with 0 successes - consider manual review",
+                    "payloads": []
+                })
+
+        # XSS-to-Admin: if we've failed before, escalate to advanced evasion techniques
+        xss_stats = self.data.get("vuln_type_stats", {}).get("xss_to_admin", {})
+        if xss_stats.get("failures", 0) > 0 and xss_stats.get("successes", 0) == 0:
+            recommendations.append({
+                "vuln_type": "xss_to_admin",
+                "priority": "high",
+                "message": (
+                    f"XSS-to-Admin has {xss_stats['failures']} failed attempts. "
+                    "Escalate to advanced filter evasion: HTML entity encoding, "
+                    "event-handler payloads on benign tags, mXSS polyglots, "
+                    "and SVG/MathML foreignObject tricks. Also try exfiltrating "
+                    "document.cookie via a report/admin-bot endpoint."
+                ),
+                "payloads": [
+                    {"name": "img_onerror", "payload": "<img src=x onerror=alert(document.cookie)>", "weight": 3},
+                    {"name": "svg_onload", "payload": "<svg onload=alert(document.cookie)>", "weight": 3},
+                    {"name": "entity_encoded", "payload": "&lt;img src=x onerror=alert(document.cookie)&gt;", "weight": 2},
+                    {"name": "mxss_polyglot", "payload": "<svg><script>alert(document.cookie)</script></svg>", "weight": 2},
+                ]
+            })
+
+        return recommendations
+
+    def get_enhanced_stats(self) -> Dict[str, Any]:
+        """Return enhanced memory statistics including failure tracking."""
+        stats = self.get_stats()
+        stats["failed_challenges_count"] = len(self.data.get("failed_challenges", []))
+        stats["platform_stats"] = self.data.get("platform_stats", {})
+        stats["vuln_type_stats"] = self.data.get("vuln_type_stats", {})
+        stats["recent_failures"] = self.data.get("failed_challenges", [])[-5:]
+        return stats
+
     def prioritize_payloads(
         self,
         vuln_type: str,
@@ -196,16 +381,20 @@ class LearningEngine:
     def reset_memory(self):
         """Reset learning database."""
         default_db = {
-            "version": "1.0",
+            "version": "2.0",
             "stats": {
                 "total_solved_challenges": 0,
                 "total_captured_flags": 0,
                 "successful_exploits": 0,
+                "failed_attempts": 0,
                 "last_learning_update": None
             },
             "technologies": {},
             "payload_weights": {},
-            "successful_chains": []
+            "successful_chains": [],
+            "failed_challenges": [],
+            "platform_stats": {},
+            "vuln_type_stats": {}
         }
         self.data = default_db
         self._save_db(default_db)

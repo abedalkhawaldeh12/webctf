@@ -1,0 +1,456 @@
+{
+  "version": "1.0",
+  "description": "CTF Challenge training set for WebCTF Suite AutoPwn training",
+  "challenges": [
+    {
+      "id": "picoctf_ssti_basic",
+      "platform": "picoCTF",
+      "name": "SSTI Basic",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["ssti", "sqli"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "easy",
+      "notes": "Jinja2 SSTI with filter bypass + SQLi auth bypass"
+    },
+    {
+      "id": "picoctf_file_upload",
+      "platform": "picoCTF",
+      "name": "File Upload RCE",
+      "url": "http://amiable-citadel.picoctf.net:50628/",
+      "vuln_types": ["file_upload", "rce"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "Apache .htaccess handler override, PHP-FPM .user.ini, double extension"
+    },
+    {
+      "id": "picoctf_qr_scramble",
+      "platform": "picoCTF",
+      "name": "Scrambled QR Code",
+      "url": "http://fickle-tempest.picoctf.net:51710/",
+      "vuln_types": ["client_side", "crypto"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "PNG scrambling with key, QR code reconstruction"
+    },
+    {
+      "id": "rootme_client_auth",
+      "platform": "Root-Me",
+      "name": "Client-Side Auth",
+      "url": "http://challenge01.root-me.org/web-client/ch9/",
+      "vuln_types": ["client_side", "auth_bypass"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Hardcoded credentials in login.js"
+    },
+    {
+      "id": "rootme_client_ch6",
+      "platform": "Root-Me",
+      "name": "Client-Side Challenge 6",
+      "url": "https://web-client-ch6.challenge01.root-me.org:58006/",
+      "vuln_types": ["client_side"],
+      "flag_prefix": "flag",
+      "difficulty": "medium",
+      "notes": "Flask/Werkzeug client-side challenge"
+    },
+    {
+      "id": "picoctf_sqli_login",
+      "platform": "picoCTF",
+      "name": "SQLi Login Bypass",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["sqli", "auth_bypass"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "easy",
+      "notes": "Classic SQL injection auth bypass"
+    },
+    {
+      "id": "picoctf_lfi_read",
+      "platform": "picoCTF",
+      "name": "LFI File Read",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["lfi", "path_traversal"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "easy",
+      "notes": "Local file inclusion with PHP stream wrappers"
+    },
+    {
+      "id": "picoctf_jwt_forge",
+      "platform": "picoCTF",
+      "name": "JWT Token Forge",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["jwt", "auth_bypass"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "JWT alg:none or secret brute force"
+    },
+    {
+      "id": "picoctf_cmd_injection",
+      "platform": "picoCTF",
+      "name": "Command Injection",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["cmd_inj", "rce"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "Command injection with filter bypass"
+    },
+    {
+      "id": "picoctf_deserialization",
+      "platform": "picoCTF",
+      "name": "Insecure Deserialization",
+      "url": "http://amiable-citadel.picoctf.net:50628/",
+      "vuln_types": ["deserialization", "rce"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "hard",
+      "notes": "Python pickle / PHP unserialize RCE"
+    },
+    {
+      "id": "picoctf_ssrf_metadata",
+      "platform": "picoCTF",
+      "name": "SSRF Cloud Metadata",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["ssrf", "cloud"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "SSRF to cloud metadata endpoint"
+    },
+    {
+      "id": "picoctf_xxe_read",
+      "platform": "picoCTF",
+      "name": "XXE File Read",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["xxe", "lfi"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "XML External Entity to read files"
+    },
+    {
+      "id": "picoctf_xss_stored",
+      "platform": "picoCTF",
+      "name": "Stored XSS",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["xss", "client_side"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "easy",
+      "notes": "Stored cross-site scripting"
+    },
+    {
+      "id": "picoctf_php_type_juggling",
+      "platform": "picoCTF",
+      "name": "PHP Type Juggling",
+      "url": "http://amiable-citadel.picoctf.net:50628/",
+      "vuln_types": ["php", "auth_bypass"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "PHP loose comparison magic hashes"
+    },
+    {
+      "id": "picoctf_eval_injection",
+      "platform": "picoCTF",
+      "name": "Eval Code Injection",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["eval_injection", "rce"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "hard",
+      "notes": "Python eval / PHP eval RCE"
+    },
+    {
+      "id": "picoctf_nosql_injection",
+      "platform": "picoCTF",
+      "name": "NoSQL Injection",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["nosql", "auth_bypass"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "MongoDB NoSQL injection auth bypass"
+    },
+    {
+      "id": "picoctf_container_escape",
+      "platform": "picoCTF",
+      "name": "Container Escape",
+      "url": "http://shape-facility.picoctf.net:54336/",
+      "vuln_types": ["container", "privesc"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "hard",
+      "notes": "Container escape via cgroup/docker socket"
+    },
+    {
+      "id": "picoctf_php_wrappers",
+      "platform": "picoCTF",
+      "name": "PHP Stream Wrappers",
+      "url": "http://amiable-citadel.picoctf.net:50628/",
+      "vuln_types": ["lfi", "php"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "php://filter, data://, expect:// wrappers"
+    },
+    {
+      "id": "picoctf_htaccess_bypass",
+      "platform": "picoCTF",
+      "name": "Htaccess Bypass",
+      "url": "http://amiable-citadel.picoctf.net:50628/",
+      "vuln_types": ["file_upload", "bypass"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "Apache .htaccess configuration bypass"
+    },
+    {
+      "id": "picoctf_php_fpm_user_ini",
+      "platform": "picoCTF",
+      "name": "PHP-FPM .user.ini",
+      "url": "http://amiable-citadel.picoctf.net:50628/",
+      "vuln_types": ["file_upload", "rce"],
+      "flag_prefix": "picoCTF",
+      "difficulty": "medium",
+      "notes": "PHP-FPM auto_prepend_file webshell"
+    },
+    {
+      "id": "rootme_http_response_splitting",
+      "platform": "Root-Me",
+      "name": "HTTP Response Splitting",
+      "url": "http://challenge01.root-me.org:58002/user/lang",
+      "vuln_types": ["header_injection", "response_splitting", "auth_bypass"],
+      "flag_prefix": "flag",
+      "difficulty": "medium",
+      "notes": "CRLF injection in lang parameter reflected into Set-Cookie header. Inject Set-Cookie: lang=admin then access /home to get flag."
+    },
+    {
+      "id": "rootme_http_headers",
+      "platform": "Root-Me",
+      "name": "HTTP Headers",
+      "url": "http://challenge01.root-me.org/web-serveur/ch1/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag hidden in HTTP response headers"
+    },
+    {
+      "id": "rootme_http_user_agent",
+      "platform": "Root-Me",
+      "name": "HTTP User-Agent",
+      "url": "http://challenge01.root-me.org/web-serveur/ch2/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific User-Agent header"
+    },
+    {
+      "id": "rootme_http_post",
+      "platform": "Root-Me",
+      "name": "HTTP POST",
+      "url": "http://challenge01.root-me.org/web-serveur/ch3/",
+      "vuln_types": ["http_methods", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires POST request with specific body"
+    },
+    {
+      "id": "rootme_http_cookies",
+      "platform": "Root-Me",
+      "name": "HTTP Cookies",
+      "url": "http://challenge01.root-me.org/web-serveur/ch4/",
+      "vuln_types": ["cookie", "auth_bypass"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires setting specific cookie value"
+    },
+    {
+      "id": "rootme_http_verb_tampering",
+      "platform": "Root-Me",
+      "name": "HTTP Verb Tampering",
+      "url": "http://challenge01.root-me.org/web-serveur/ch5/",
+      "vuln_types": ["http_methods", "auth_bypass"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires non-standard HTTP method"
+    },
+    {
+      "id": "rootme_http_headers_2",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 2",
+      "url": "http://challenge01.root-me.org/web-serveur/ch6/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_3",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 3",
+      "url": "http://challenge01.root-me.org/web-serveur/ch7/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_4",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 4",
+      "url": "http://challenge01.root-me.org/web-serveur/ch8/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_5",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 5",
+      "url": "http://challenge01.root-me.org/web-serveur/ch9/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_6",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 6",
+      "url": "http://challenge01.root-me.org/web-serveur/ch10/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_7",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 7",
+      "url": "http://challenge01.root-me.org/web-serveur/ch11/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_8",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 8",
+      "url": "http://challenge01.root-me.org/web-serveur/ch12/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_9",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 9",
+      "url": "http://challenge01.root-me.org/web-serveur/ch13/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_10",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 10",
+      "url": "http://challenge01.root-me.org/web-serveur/ch14/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_11",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 11",
+      "url": "http://challenge01.root-me.org/web-serveur/ch15/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_12",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 12",
+      "url": "http://challenge01.root-me.org/web-serveur/ch16/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_13",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 13",
+      "url": "http://challenge01.root-me.org/web-serveur/ch17/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_14",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 14",
+      "url": "http://challenge01.root-me.org/web-serveur/ch18/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_15",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 15",
+      "url": "http://challenge01.root-me.org/web-serveur/ch19/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_16",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 16",
+      "url": "http://challenge01.root-me.org/web-serveur/ch20/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_17",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 17",
+      "url": "http://challenge01.root-me.org/web-serveur/ch21/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_18",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 18",
+      "url": "http://challenge01.root-me.org/web-serveur/ch22/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_19",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 19",
+      "url": "http://challenge01.root-me.org/web-serveur/ch23/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    },
+    {
+      "id": "rootme_http_headers_20",
+      "platform": "Root-Me",
+      "name": "HTTP Headers 20",
+      "url": "http://challenge01.root-me.org/web-serveur/ch24/",
+      "vuln_types": ["header_injection", "recon"],
+      "flag_prefix": "flag",
+      "difficulty": "easy",
+      "notes": "Flag requires specific request headers"
+    }
+  ]
+}

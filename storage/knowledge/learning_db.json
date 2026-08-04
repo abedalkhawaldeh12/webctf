@@ -1,10 +1,11 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "stats": {
-    "total_solved_challenges": 8,
-    "total_captured_flags": 8,
-    "successful_exploits": 13,
-    "last_learning_update": "2026-08-04 09:15:35"
+    "total_solved_challenges": 17,
+    "total_captured_flags": 20,
+    "successful_exploits": 22,
+    "last_learning_update": "2026-08-04 12:40:24",
+    "failed_attempts": 7
   },
   "technologies": {
     "flask/werkzeug": {
@@ -70,6 +71,13 @@
           "payload": "gASVMwAAAAAAAACMAm50lIwGc3lzdG",
           "success_count": 2
         }
+      },
+      "nosql_injection": {
+        "mongodb_bypass": {
+          "weight": 4,
+          "payload": "NoSQL operator injection",
+          "success_count": 3
+        }
       }
     },
     "apache": {
@@ -91,9 +99,16 @@
     "nginx": {
       "client_side_auth": {
         "js_hardcoded_check": {
-          "weight": 3,
+          "weight": 9,
           "payload": "4dm1n:sh.org",
-          "success_count": 2
+          "success_count": 8
+        }
+      },
+      "nosql_injection": {
+        "mongodb_bypass": {
+          "weight": 4,
+          "payload": "NoSQL operator injection",
+          "success_count": 3
         }
       }
     }
@@ -148,13 +163,130 @@
       "last_success": "2026-08-04 09:09:49"
     },
     "client_side_auth:js_hardcoded_check": {
-      "weight": 2,
+      "weight": 8,
       "vuln_type": "client_side_auth",
       "name": "js_hardcoded_check",
       "payload": "4dm1n:sh.org",
-      "success_count": 2,
-      "last_success": "2026-08-04 09:15:35"
+      "success_count": 8,
+      "last_success": "2026-08-04 10:54:00"
+    },
+    "nosql_injection:mongodb_bypass": {
+      "weight": 3,
+      "vuln_type": "nosql_injection",
+      "name": "mongodb_bypass",
+      "payload": "NoSQL operator injection",
+      "success_count": 3,
+      "last_success": "2026-08-04 11:59:38"
     }
   },
-  "successful_chains": []
+  "successful_chains": [],
+  "failed_challenges": [
+    {
+      "target": "http://challenge01.root-me.org/web-client/ch21/",
+      "timestamp": "2026-08-04 11:59:41",
+      "technologies": [
+        "Nginx",
+        "PHP"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://example.com/forum",
+      "timestamp": "2026-08-04 12:03:19",
+      "technologies": [
+        "nginx",
+        "php"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://example.com/forum",
+      "timestamp": "2026-08-04 12:04:48",
+      "technologies": [
+        "nginx",
+        "php"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://example.com/forum",
+      "timestamp": "2026-08-04 12:10:46",
+      "technologies": [
+        "nginx",
+        "php"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://example.com/forum",
+      "timestamp": "2026-08-04 12:21:08",
+      "technologies": [
+        "nginx",
+        "php"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://example.com/forum",
+      "timestamp": "2026-08-04 12:22:48",
+      "technologies": [
+        "nginx",
+        "php"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    },
+    {
+      "target": "http://activist-birds.picoctf.net:64732/",
+      "timestamp": "2026-08-04 12:40:24",
+      "technologies": [
+        "Node.js",
+        "Express"
+      ],
+      "vuln_types": [
+        "xss_to_admin"
+      ],
+      "reason": "XSS filter blocked all tested evasion payloads"
+    }
+  ],
+  "platform_stats": {
+    "root-me": {
+      "total": 3,
+      "successes": 3,
+      "failures": 0,
+      "vuln_types": {
+        "client_side": {
+          "successes": 3,
+          "failures": 0
+        },
+        "auth_bypass": {
+          "successes": 1,
+          "failures": 0
+        }
+      }
+    }
+  },
+  "vuln_type_stats": {
+    "xss_to_admin": {
+      "successes": 0,
+      "failures": 7
+    }
+  }
 }

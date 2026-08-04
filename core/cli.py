@@ -54,7 +54,7 @@ from modules.blind_exfiltrator import (
 )
 from modules.scanner import scan_target
 from modules.cheatsheet import (
-    PHP_QUIRKS, FILE_UPLOAD_TRICKS, analyze_code_snippet
+    PHP_QUIRKS, FILE_UPLOAD_TRICKS, XSS_EVASION, analyze_code_snippet
 )
 from modules.autopwn import AutoPwnPipeline
 from core.memory import LearningEngine, SessionStorage, LootManager
@@ -548,7 +548,7 @@ class WebCTFShell(cmd.Cmd):
 
     # ─── CHEATSHEET & CODE ANALYZER ────────────────────────────────────
     def do_cheat(self, arg):
-        """CTF Cheatsheets & Tricks: cheat <quirks|upload>"""
+        """CTF Cheatsheets & Tricks: cheat <quirks|upload|xss>"""
         target = arg.strip().lower() if arg else "quirks"
         if target == "quirks":
             print_header("PHP Loose Comparison & Quirks Matrix")
@@ -558,8 +558,12 @@ class WebCTFShell(cmd.Cmd):
             print_header("File Upload Filter Bypass Techniques")
             rows = [[u["Technique"], u["Payload/Tip"]] for u in FILE_UPLOAD_TRICKS]
             print_table(["Technique", "Payload / Method"], rows, title="File Upload Bypasses")
+        elif target == "xss":
+            print_header("OWASP XSS Filter Evasion Cheat Sheet")
+            rows = [[x["Technique"], x["Payload/Tip"]] for x in XSS_EVASION]
+            print_table(["Technique", "Payload / Method"], rows, title="XSS Filter Evasion")
         else:
-            print_warning("Available cheatsheets: cheat quirks, cheat upload")
+            print_warning("Available cheatsheets: cheat quirks, cheat upload, cheat xss")
 
     def do_analyze(self, arg):
         """Scan source code snippet for dangerous vulnerability sinks: analyze <code_or_file> [language]"""
@@ -618,18 +622,104 @@ class WebCTFShell(cmd.Cmd):
         pipeline = AutoPwnPipeline(url, step_by_step=step_mode, custom_flag_prefix=prefix)
         pipeline.run()
 
+    def do_reason(self, arg):
+        """Deep Reasoning Engine for complex challenges: reason <target_url> [--prefix PREFIX]"""
+        if not arg:
+            print_warning("Usage: reason <target_url> [--prefix PREFIX]")
+            return
+
+        args = shlex.split(arg)
+        url = args[0]
+        prefix = None
+        if "--prefix" in args:
+            idx = args.index("--prefix")
+            if idx + 1 < len(args):
+                prefix = args[idx + 1]
+
+        # Build a minimal state by doing quick recon first
+        from modules.reasoning_engine import ReasoningEngine
+        from modules.scanner import scan_target, extract_forms_and_links, fingerprint_tech
+        from core.utils import create_session
+
+        session = create_session()
+        state = {
+            "target_url": url,
+            "tech_stack": [],
+            "endpoints": set(),
+            "forms": [],
+            "parameters": set(),
+            "comments": [],
+            "sensitive_hits": [],
+            "cookies": {},
+            "jwt_tokens": [],
+            "scripts": set(),
+            "inline_scripts": [],
+            "leaked_source_files": {},
+            "leaked_secrets": {},
+            "vulnerabilities": [],
+            "priv_esc_vectors": [],
+            "captured_flags": set(),
+            "attack_steps": [],
+            "curl_commands": [],
+            "active_rce_method": None
+        }
+
+        # Quick recon to populate state
+        try:
+            r = session.get(url, timeout=7)
+            state["baseline_html"] = r.text
+            state["cookies"].update(r.cookies.get_dict())
+            state["tech_stack"] = fingerprint_tech(dict(r.headers), r.text, r.cookies.get_dict())
+            parsed = extract_forms_and_links(r.text, url)
+            for l in parsed["links"]:
+                state["endpoints"].add(l)
+            for p in parsed["parameters"]:
+                state["parameters"].add(p)
+            state["forms"].extend(parsed["forms"])
+            state["scripts"].update(parsed.get("scripts", []))
+            state["inline_scripts"].extend(parsed.get("inline_scripts", []))
+
+            # Also extract parameters directly from the target URL query string
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(url).query)
+            for p in qs:
+                state["parameters"].add(p)
+
+            # Probe sensitive paths for source leaks
+            hits = scan_target(url, max_workers=6, flag_prefix=prefix)
+            for h in hits:
+                if h["status"] == 200 and any(x in h["path"] for x in [".env", "config", "app.py", "backup", "flag", ".git"]):
+                    try:
+                        content = session.get(h["url"], timeout=5).text
+                        state["leaked_source_files"][h["path"]] = content
+                    except Exception:
+                        pass
+        except Exception as e:
+            print_error(f"Recon failed: {e}")
+
+        # Run the deep reasoning engine
+        engine = ReasoningEngine(url, session=session, state=state)
+        report = engine.run_full_reasoning()
+
+        # Check for flags in any fetched content
+        if prefix:
+            from core.utils import find_flags
+            for f in find_flags(str(report), prefix):
+                print_flag(f)
+
     def do_memory(self, arg):
         """Persistent Memory & Learning Engine: memory [stats|loot|sessions|reset]"""
         action = arg.strip().lower() if arg else "stats"
         le = LearningEngine()
 
         if action == "stats":
-            stats = le.get_stats()
+            stats = le.get_enhanced_stats()
             s = stats["stats"]
             print_header("Adaptive Learning Memory Stats", f"Last Update: {s.get('last_learning_update') or 'Never'}")
             print_info(f"Total Solved Challenges: [bold green]{s.get('total_solved_challenges', 0)}[/bold green]")
             print_info(f"Total Flags Captured:    [bold yellow]{s.get('total_captured_flags', 0)}[/bold yellow]")
             print_info(f"Successful Exploits:     [bold cyan]{s.get('successful_exploits', 0)}[/bold cyan]")
+            print_info(f"Failed Attempts:         [bold red]{s.get('failed_attempts', 0)}[/bold red]")
             print_info(f"Learned Technologies:    [bold magenta]{stats.get('learned_technologies_count', 0)}[/bold magenta]")
             print_info(f"Weighted Payloads:       [bold white]{stats.get('learned_payloads_count', 0)}[/bold white]")
 
@@ -637,6 +727,33 @@ class WebCTFShell(cmd.Cmd):
             if top:
                 rows = [[p.get("vuln_type", ""), p.get("name", ""), str(p.get("weight", 1)), str(p.get("success_count", 1))] for p in top]
                 print_table(["Vulnerability", "Payload Name", "Weight", "Successes"], rows, title="Top Weighted Winning Payloads")
+
+            # Show platform stats
+            if stats.get("platform_stats"):
+                p_rows = []
+                for pkey, pdata in sorted(stats["platform_stats"].items()):
+                    total = pdata.get("total", 0)
+                    succ = pdata.get("successes", 0)
+                    rate = round(succ / total * 100, 1) if total else 0
+                    p_rows.append([pkey, str(total), str(succ), str(pdata.get("failures", 0)), f"{rate}%"])
+                print_table(["Platform", "Total", "Successes", "Failures", "Success Rate"], p_rows, title="Platform Performance")
+
+            # Show vuln type stats
+            if stats.get("vuln_type_stats"):
+                v_rows = []
+                for vkey, vdata in sorted(stats["vuln_type_stats"].items()):
+                    succ = vdata.get("successes", 0)
+                    fail = vdata.get("failures", 0)
+                    total = succ + fail
+                    rate = round(succ / total * 100, 1) if total else 0
+                    v_rows.append([vkey, str(succ), str(fail), f"{rate}%"])
+                print_table(["Vuln Type", "Successes", "Failures", "Success Rate"], v_rows, title="Vulnerability Type Performance")
+
+            # Show recent failures
+            recent_failures = stats.get("recent_failures", [])
+            if recent_failures:
+                f_rows = [[f.get("target", ""), ", ".join(f.get("vuln_types", [])), f.get("reason", ""), f.get("timestamp", "")] for f in recent_failures]
+                print_table(["Target", "Vuln Types", "Reason", "Timestamp"], f_rows, title="Recent Failed Challenges")
 
         elif action == "loot":
             all_loot = LootManager.list_all_loot()
@@ -699,6 +816,11 @@ def run_cli_arguments():
     p_auto.add_argument("url", help="Challenge target URL")
     p_auto.add_argument("--step", action="store_true", help="Guided step-by-step mode")
     p_auto.add_argument("--prefix", dest="flag_prefix", help="Custom flag prefix (e.g. picoCTF)")
+
+    # Deep Reasoning
+    p_reason = subparsers.add_parser("reason", help="Deep Reasoning Engine for complex challenges (hypothesis-driven)")
+    p_reason.add_argument("url", help="Challenge target URL")
+    p_reason.add_argument("--prefix", dest="flag_prefix", help="Custom flag prefix (e.g. picoCTF)")
 
     # Memory
     p_mem = subparsers.add_parser("memory", help="Persistent Memory & Learning Engine stats")
@@ -792,7 +914,7 @@ def run_cli_arguments():
 
     # Cheat
     p_cheat = subparsers.add_parser("cheat", help="CTF Cheatsheets")
-    p_cheat.add_argument("topic", choices=["quirks", "upload"], help="Cheatsheet topic")
+    p_cheat.add_argument("topic", choices=["quirks", "upload", "xss"], help="Cheatsheet topic")
 
     # Analyze
     p_ana = subparsers.add_parser("analyze", help="Scan code snippet/file for vulnerability sinks")
@@ -819,6 +941,9 @@ def run_cli_arguments():
             prefix_arg = f" --prefix {args.flag_prefix}" if args.flag_prefix else ""
             step_arg = " --step" if args.step else ""
             shell.do_autopwn(f"{args.url}{step_arg}{prefix_arg}")
+        elif args.subcommand == "reason":
+            prefix_arg = f" --prefix {args.flag_prefix}" if args.flag_prefix else ""
+            shell.do_reason(f"{args.url}{prefix_arg}")
         elif args.subcommand == "response":
             shell.do_response(args.content)
         elif args.subcommand == "memory":

