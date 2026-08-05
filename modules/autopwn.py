@@ -291,6 +291,10 @@ class AutoPwnPipeline:
                 self.state["parameters"].add(p)
 
             print_info(f"Discovered [bold green]{len(self.state['endpoints'])}[/bold green] Endpoints, [bold green]{len(self.state['forms'])}[/bold green] Forms, [bold green]{len(self.state['scripts'])}[/bold green] Scripts, [bold green]{len(self.state['parameters'])}[/bold green] Input Parameters.")
+            
+            # 3b. DEEP CRAWL: Visit every discovered endpoint and analyze content
+            self._deep_crawl_endpoints()
+            
             # 4. Dummy Data Harvest (Form Interaction)
             self._harvest_form_cookies()
 
@@ -401,6 +405,187 @@ class AutoPwnPipeline:
                             self._check_and_store_flags(f, f"Backup Flag ({bh['path']})")
             else:
                 self.narrator.speak_recon("No backup files found via dynamic probing.")
+
+    # =========================================================================
+    # PHASE 1c: Deep Crawl - Visit all endpoints and analyze content
+    # =========================================================================
+    def _deep_crawl_endpoints(self):
+        """
+        Deep Crawl: Visit every discovered endpoint and sensitive hit.
+        For each page:
+        1. Check for CTF flags in body, headers, and cookies
+        2. Extract hardcoded credentials (passwords, API keys, tokens)
+        3. Extract HTML comments (often contain hints or flags)
+        4. Discover new links and forms (recursive link discovery)
+        5. Download and save source code from .bak/.phps/.txt files
+        """
+        visited = {self.target_url}  # Already visited root
+        to_visit = set()
+        
+        # Gather all URLs to crawl
+        for ep in self.state["endpoints"]:
+            if ep not in visited:
+                to_visit.add(ep)
+        
+        # Add sensitive hits (200 status) as crawl targets
+        for h in self.state.get("sensitive_hits", []):
+            if h.get("status") == 200 and h.get("url"):
+                to_visit.add(h["url"])
+        
+        if not to_visit:
+            return
+        
+        self.narrator.speak_thinking(f"I found {len(to_visit)} pages I haven't read yet. Let me crawl each one looking for flags, passwords, and hints...")
+        
+        # Credential patterns to search for in page content
+        CREDENTIAL_PATTERNS = [
+            # Hardcoded passwords
+            (r'(?:password|passwd|pass|pwd)\s*[:=]\s*["\']([^"\']{3,})["\']', "password"),
+            (r'(?:password|passwd|pass|pwd)\s*[:=]\s*(\S{3,})', "password"),
+            # API keys and tokens
+            (r'(?:api[_-]?key|apikey|secret[_-]?key|token|auth[_-]?token)\s*[:=]\s*["\']([^"\']{8,})["\']', "api_key"),
+            # Database credentials
+            (r'(?:db[_-]?pass|db[_-]?password|mysql[_-]?pass|pg[_-]?pass)\s*[:=]\s*["\']([^"\']{3,})["\']', "db_password"),
+            # Connection strings
+            (r'(?:mysql|postgres|mongodb|redis)://([^"\'\s]+)', "connection_string"),
+            # Username patterns
+            (r'(?:username|user|admin[_-]?user|login)\s*[:=]\s*["\']([^"\']{2,})["\']', "username"),
+            # Secret/Key patterns  
+            (r'(?:SECRET|PRIVATE|KEY|ENCRYPTION)\s*[:=]\s*["\']([^"\']{8,})["\']', "secret"),
+            # PHP define() constants
+            (r"define\s*\(\s*['\"](?:PASSWORD|PASS|SECRET|KEY|DB_PASS|DB_PASSWORD|FLAG)['\"],\s*['\"]([^'\"]+)['\"]\s*\)", "php_define"),
+        ]
+        
+        # Hint patterns - words that suggest where the flag might be
+        HINT_PATTERNS = [
+            r'(?:hint|clue|tip)\s*[:=]\s*["\']([^"\']+)["\']',
+            r'<!--\s*(?:hint|clue|flag|secret|password|todo|fixme|hack|note)\s*[:=]?\s*(.+?)\s*-->',
+            r'//\s*(?:TODO|FIXME|HACK|NOTE|SECRET|PASSWORD|FLAG)\s*[:=]?\s*(.+)',
+        ]
+        
+        crawled_count = 0
+        max_crawl = 50  # Safety limit
+        new_links = set()
+        
+        for url in list(to_visit):
+            if crawled_count >= max_crawl:
+                break
+            try:
+                self.narrator.speak_recon(f"Crawling: {url}")
+                r = self.session.get(url, timeout=12, allow_redirects=True)
+                crawled_count += 1
+                visited.add(url)
+                
+                content = r.text
+                content_type = r.headers.get("Content-Type", "")
+                
+                # 1. Check for CTF flags in body
+                self._check_and_store_flags(content, f"Crawled Page ({url})")
+                
+                # 2. Check for flags in response headers
+                for hk, hv in r.headers.items():
+                    self._check_and_store_flags(f"{hk}: {hv}", f"Header ({url})")
+                
+                # 3. Check for flags in cookies
+                for ck, cv in r.cookies.items():
+                    self._check_and_store_flags(cv, f"Cookie ({url})")
+                    self.state["cookies"][ck] = cv
+                
+                # 4. Extract HTML comments (hints & secrets)
+                page_comments = re.findall(r"<!--(.*?)-->", content, re.DOTALL)
+                for c in page_comments:
+                    c_clean = c.strip()
+                    if c_clean and c_clean not in self.state["comments"]:
+                        self.state["comments"].append(c_clean)
+                        self._check_and_store_flags(c_clean, f"Comment ({url})")
+                        # Check for hint patterns
+                        for hint_pat in HINT_PATTERNS:
+                            hint_matches = re.findall(hint_pat, c_clean, re.IGNORECASE)
+                            for hm in hint_matches:
+                                self.narrator.speak_success(f"Found a hint in comment: {hm.strip()}")
+                
+                # 5. Search for credentials
+                for pattern, cred_type in CREDENTIAL_PATTERNS:
+                    matches = re.findall(pattern, content, re.IGNORECASE)
+                    for match in matches:
+                        # Avoid false positives (CSS, common words)
+                        if len(match) > 2 and match.lower() not in ["none", "null", "true", "false", "undefined", "password", "example"]:
+                            self.narrator.speak_success(f"Found {cred_type} in {url}: {match}")
+                            self.state.setdefault("discovered_credentials", []).append({
+                                "type": cred_type,
+                                "value": match,
+                                "source": url
+                            })
+                
+                # 6. If this looks like source code (backup file, .phps, .txt), save it
+                is_source = any(url.endswith(ext) for ext in [".bak", ".old", ".swp", ".orig", ".phps", ".txt", ".save", ".backup"])
+                is_plaintext = "text/plain" in content_type or "octet-stream" in content_type
+                has_code = any(marker in content for marker in ["<?php", "<?=", "import ", "def ", "function ", "require(", "include("])
+                
+                if is_source or is_plaintext or has_code:
+                    from urllib.parse import urlparse as _urlparse
+                    filename = _urlparse(url).path.lstrip("/") or "unknown_source"
+                    self.state["leaked_source_files"][filename] = content
+                    LootManager.save_source_file(self.target_url, filename, content)
+                    self.narrator.speak_action(f"Saved source code from: {filename}")
+                
+                # 7. Discover new links for recursive crawling (1 level deep)
+                page_links = re.findall(r'href=["\']([^"\']+)["\']', content, re.IGNORECASE)
+                for link in page_links:
+                    full_url = urljoin(url, link)
+                    # Only follow links on the same domain
+                    if urlparse(full_url).netloc == urlparse(self.target_url).netloc:
+                        if full_url not in visited and full_url not in to_visit:
+                            new_links.add(full_url)
+                            self.state["endpoints"].add(full_url)
+                
+                # 8. Extract new forms
+                page_parsed = extract_forms_and_links(content, url)
+                for form in page_parsed["forms"]:
+                    if form not in self.state["forms"]:
+                        self.state["forms"].append(form)
+                for p in page_parsed["parameters"]:
+                    self.state["parameters"].add(p)
+                    
+            except Exception:
+                pass
+        
+        # Crawl newly discovered links (depth 2)
+        for url in list(new_links)[:20]:
+            if url in visited:
+                continue
+            try:
+                self.narrator.speak_recon(f"Following nested link: {url}")
+                r = self.session.get(url, timeout=10, allow_redirects=True)
+                visited.add(url)
+                self._check_and_store_flags(r.text, f"Nested Page ({url})")
+                
+                # Check source code
+                has_code = any(marker in r.text for marker in ["<?php", "<?=", "import ", "def ", "function "])
+                if has_code or any(url.endswith(ext) for ext in [".bak", ".phps", ".txt"]):
+                    from urllib.parse import urlparse as _urlparse
+                    filename = _urlparse(url).path.lstrip("/") or "nested_source"
+                    self.state["leaked_source_files"][filename] = r.text
+                    LootManager.save_source_file(self.target_url, filename, r.text)
+                
+                # Extract credentials
+                for pattern, cred_type in CREDENTIAL_PATTERNS:
+                    matches = re.findall(pattern, r.text, re.IGNORECASE)
+                    for match in matches:
+                        if len(match) > 2 and match.lower() not in ["none", "null", "true", "false", "undefined", "password", "example"]:
+                            self.narrator.speak_success(f"Found {cred_type} in {url}: {match}")
+                            self.state.setdefault("discovered_credentials", []).append({
+                                "type": cred_type, "value": match, "source": url
+                            })
+            except Exception:
+                pass
+        
+        # Summary
+        total_creds = len(self.state.get("discovered_credentials", []))
+        if total_creds:
+            self.narrator.speak_success(f"Deep Crawl complete: found {total_creds} credentials/secrets across {crawled_count} pages!")
+        else:
+            self.narrator.speak_recon(f"Deep Crawl complete: crawled {crawled_count} pages. No credentials found yet.")
 
     # =========================================================================
     # PHASE 1b: Dummy Data Harvest
