@@ -598,19 +598,27 @@ class AutoPwnPipeline:
             self.narrator.speak_recon(f"Deep Crawl complete: crawled {crawled_count} pages. No credentials found yet.")
 
     # =========================================================================
-    # PHASE 1b: Dummy Data Harvest
+    # PHASE 1b: Dummy Data Harvest & Guest Registration
     # =========================================================================
     def _harvest_form_cookies(self):
-        """Submit dummy data to all discovered forms to harvest hidden cookies (like JWTs)."""
+        """Submit dummy data to all discovered forms to harvest hidden cookies (like JWTs). 
+        Also handles autonomous Guest Account Registration for authenticated crawls."""
         forms = self.state.get("forms", [])
         if not forms:
             return
 
         self.narrator.speak_recon(f"Initiating Dummy Data Harvest on {len(forms)} forms to uncover hidden state/cookies...")
+        
+        # Track if we successfully registered a new account
+        new_account_created = False
+        
         for f in forms:
             action = f.get("action", self.target_url)
             method = f.get("method", "GET").upper()
             inputs = f.get("inputs", [])
+            
+            # Detect if this is a registration form
+            is_register = any(k in action.lower() for k in ["register", "signup", "join", "create"])
             
             # Prepare dummy payload
             payload = {}
@@ -620,23 +628,33 @@ class AutoPwnPipeline:
                     continue
                 itype = i.get("type", "text")
                 if itype == "email":
-                    payload[name] = "test@example.com"
-                elif itype == "password":
-                    payload[name] = "password"
+                    payload[name] = "hacker@ctf.local" if is_register else "test@example.com"
+                elif itype == "password" or "pass" in name.lower():
+                    payload[name] = "Pwn3d_Password123!" if is_register else "password"
                 elif itype == "number":
                     payload[name] = "1"
                 else:
-                    payload[name] = "testuser"
+                    payload[name] = "guest_pwn" if is_register else "testuser"
 
-            # Submit dummy data
+            # Submit data
             try:
+                if is_register:
+                    self.narrator.speak_thinking(f"Found a registration form at {action}. Creating a guest account...")
+                
+                # Use allow_redirects=True for registration to catch automatic logins
+                allow_redir = True if is_register else False
+                
                 if method == "POST":
-                    r = self.session.post(action, data=payload, timeout=15, allow_redirects=False)
+                    r = self.session.post(action, data=payload, timeout=15, allow_redirects=allow_redir)
                 else:
-                    r = self.session.get(action, params=payload, timeout=15, allow_redirects=False)
+                    r = self.session.get(action, params=payload, timeout=15, allow_redirects=allow_redir)
+                
+                if is_register and r.status_code in [200, 201, 302]:
+                    self.narrator.speak_success(f"Successfully registered guest account at {action}!")
+                    new_account_created = True
                 
                 # Check for new cookies!
-                new_cookies = r.cookies.get_dict()
+                new_cookies = self.session.cookies.get_dict()
                 if new_cookies:
                     added = {k: v for k, v in new_cookies.items() if k not in self.state["cookies"]}
                     if added:
@@ -648,11 +666,15 @@ class AutoPwnPipeline:
                                 self.state["jwt_tokens"].append((cname, cval))
                                 print_success(f"  -> [bold cyan]JWT Token Harvested![/bold cyan] ({cname})")
             except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-                pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                 pass
-
-
-    # =========================================================================
+                
+        # If we successfully created a guest account, we should crawl the site again 
+        # to discover authenticated routes (like /dashboard or /claim)
+        if new_account_created:
+            self.narrator.speak_thinking("Guest account created and session established. Running a second Deep Crawl as an authenticated user to discover hidden pages...")
+            # We clear the visited endpoints from the state so the crawler visits them again with the new session cookies
+            self.state["endpoints"].add(self.target_url) 
+            self._deep_crawl_endpoints()    # =========================================================================
     # PHASE 2: الفحص والتحليل الإحصائي (Scanning & Statistical Analysis)
     # =========================================================================
     def phase2_statistical_analysis(self):
