@@ -620,6 +620,12 @@ class AutoPwnPipeline:
             # Detect if this is a registration form
             is_register = any(k in action.lower() for k in ["register", "signup", "join", "create"])
             
+            # Extract intelligent context-based credentials if found earlier
+            discovered_creds = self.state.get("discovered_credentials", [])
+            smart_username = next((c["value"] for c in discovered_creds if c["type"] == "username"), "guest_pwn" if is_register else "testuser")
+            smart_email = next((c["value"] for c in discovered_creds if c["type"] == "email"), "hacker@ctf.local" if is_register else "test@example.com")
+            smart_password = next((c["value"] for c in discovered_creds if c["type"] == "password"), "Pwn3d_Password123!" if is_register else "password")
+            
             # Prepare dummy payload
             payload = {}
             for i in inputs:
@@ -628,18 +634,18 @@ class AutoPwnPipeline:
                     continue
                 itype = i.get("type", "text")
                 if itype == "email":
-                    payload[name] = "hacker@ctf.local" if is_register else "test@example.com"
+                    payload[name] = smart_email
                 elif itype == "password" or "pass" in name.lower():
-                    payload[name] = "Pwn3d_Password123!" if is_register else "password"
+                    payload[name] = smart_password
                 elif itype == "number":
                     payload[name] = "1"
                 else:
-                    payload[name] = "guest_pwn" if is_register else "testuser"
+                    payload[name] = smart_username
 
             # Submit data
             try:
                 if is_register:
-                    self.narrator.speak_thinking(f"Found a registration form at {action}. Creating a guest account...")
+                    self.narrator.speak_thinking(f"Found a registration form at {action}. Creating a guest account using username: {smart_username}...")
                 
                 # Use allow_redirects=True for registration to catch automatic logins
                 allow_redir = True if is_register else False
