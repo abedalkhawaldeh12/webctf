@@ -176,6 +176,9 @@ class ReasoningEngine:
         self.base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         self.session = session or create_session()
         self.state = state or {}
+        self.challenge_name = self.state.get("challenge_name", "")
+        self.challenge_desc = self.state.get("challenge_desc", "")
+        self.challenge_hints = self.state.get("challenge_hints", "")
         self.hypotheses: List[Hypothesis] = []
         self.attack_plan: List[Dict[str, Any]] = []
         self.probe_history: List[Dict[str, Any]] = []   # for adaptive strategy
@@ -187,6 +190,15 @@ class ReasoningEngine:
     def build_hypotheses(self) -> List[Hypothesis]:
         """Generate a prioritized set of offensive hypotheses from current state."""
         self.hypotheses = []
+
+        # Incorporate user-provided challenge context into all hypotheses later
+        context_evidence = []
+        if self.challenge_name:
+            context_evidence.append(f"Challenge Name: {self.challenge_name}")
+        if self.challenge_desc:
+            context_evidence.append(f"Description: {self.challenge_desc}")
+        if self.challenge_hints:
+            context_evidence.append(f"Hints: {self.challenge_hints}")
 
         # A. CRLF / Header Injection (from reflected params + response headers)
         self._hypothesize_crlf()
@@ -224,9 +236,36 @@ class ReasoningEngine:
         # L. XSS-to-Admin (stored XSS + admin bot / report endpoint)
         self._hypothesize_xss_to_admin()
 
+        # M. NLP / Hint-based Hypotheses
+        self._hypothesize_from_hints()
+
+        # Append challenge context evidence to all generated hypotheses
+        if context_evidence:
+            for h in self.hypotheses:
+                h.evidence.extend(context_evidence)
+
         # Sort by confidence descending
         self.hypotheses.sort(key=lambda h: h.confidence, reverse=True)
         return self.hypotheses
+
+    def _hypothesize_from_hints(self):
+        """Analyze thinking_profile to extract likely vulnerability classes."""
+        profile = self.state.get("thinking_profile", {})
+        if not profile:
+            return
+
+        vulns = profile.get("vulnerabilities", [])
+        clues = profile.get("specific_clues", [])
+
+        for vuln in vulns:
+            self.hypotheses.append(Hypothesis(
+                title=f"Thinking Engine - Likely {vuln.upper()}",
+                vuln_class=vuln,
+                confidence=0.90, # High confidence since Thinking Engine explicitly extracted it
+                evidence=[f"Thinking Engine identified '{vuln}' as a highly probable target."] + clues,
+                action=f"Prioritize {vuln.upper()} payloads across all discovered inputs.",
+                target_url=self.base_url
+            ))
 
     def _hypothesize_crlf(self):
         """Detect parameters that reflect into response headers -> CRLF injection."""

@@ -86,6 +86,23 @@ class CTFReasoner:
         """Systematically observe the application's behavior."""
         self.observations = []
 
+        # ── 1.0 Include User-Provided Context ──────────────────────────
+        challenge_name = self.state.get("challenge_name")
+        if challenge_name:
+            self.observations.append(Observation(
+                "context", f"Challenge Name: {challenge_name}", confidence=1.0
+            ))
+        challenge_desc = self.state.get("challenge_desc")
+        if challenge_desc:
+            self.observations.append(Observation(
+                "context", f"Description: {challenge_desc}", confidence=1.0
+            ))
+        challenge_hints = self.state.get("challenge_hints")
+        if challenge_hints:
+            self.observations.append(Observation(
+                "context", f"Hints: {challenge_hints}", confidence=1.0
+            ))
+
         # ── 1.1 Fetch root and observe response ────────────────────────
         try:
             r = self.session.get(self.target_url, timeout=8, allow_redirects=False)
@@ -544,9 +561,31 @@ class CTFReasoner:
                 exploit="PHP-specific vectors"
             ))
 
+        # ── H10: NLP / Hint-based ──────────────────────────────────────
+        self._hypothesize_from_hints()
+
         # Sort by confidence
         self.hypotheses.sort(key=lambda h: h.confidence, reverse=True)
         return self.hypotheses
+
+    def _hypothesize_from_hints(self):
+        """Analyze thinking_profile to extract likely vulnerability classes."""
+        profile = self.state.get("thinking_profile", {})
+        if not profile:
+            return
+
+        vulns = profile.get("vulnerabilities", [])
+        clues = profile.get("specific_clues", [])
+
+        for vuln in vulns:
+            self.hypotheses.append(Hypothesis(
+                title=f"Thinking Engine - Likely {vuln.upper()}",
+                logic=f"The Thinking Engine strongly implies a {vuln.upper()} vulnerability based on deep NLP analysis.",
+                test=f"Prioritize {vuln.upper()} payloads and tests.",
+                confidence=0.90,
+                observations=[f"Thinking Engine identified '{vuln}' as a highly probable target."] + clues,
+                exploit=f"{vuln.upper()}"
+            ))
 
     # ═══════════════════════════════════════════════════════════════════
     # 3. TEST - Confirm or refute hypotheses with targeted probes
