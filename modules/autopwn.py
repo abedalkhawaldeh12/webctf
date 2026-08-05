@@ -2142,6 +2142,8 @@ class AutoPwnPipeline:
         # Execute steps in dependency order (topological sort by depends_on)
         remaining = list(plan)
         progress = True
+        failed_steps = []
+        
         while remaining and progress:
             progress = False
             for step in list(remaining):
@@ -2149,9 +2151,25 @@ class AutoPwnPipeline:
                 # A step is ready when all its dependencies have been attempted
                 if all(d in executed for d in deps):
                     remaining.remove(step)
+                    self.narrator.speak_thinking(f"Attempting Step {step['step']}: {step.get('goal', 'Unknown Goal')}")
+                    
                     success = self._execute_reasoning_step(step, executed, chain_results)
                     executed[step["step"]] = success
-                    progress = True
+                    
+                    if success:
+                        progress = True
+                        self.narrator.speak_success(f"Step {step['step']} succeeded!")
+                    else:
+                        failed_steps.append(step)
+                        self.narrator.speak_warning(f"Step {step['step']} failed. I won't give up yet, let me rethink this...")
+                        # If it's a critical auth bypass or state-changing step, try generic fuzzing as a fallback
+                        if any(k in step.get("goal", "").lower() for k in ["bypass", "admin", "login", "claim"]):
+                            self.narrator.speak_thinking("Fallback: Let's try aggressive parameter fuzzing on this target since the reasoned approach failed.")
+                            # Call generic parameter pollution/fuzzing as fallback
+                            self._exploit_hpp()
+                        
+        if failed_steps and not progress:
+            self.narrator.speak_action(f"I've hit a wall after {len(executed)} steps. {len(failed_steps)} steps failed. Re-evaluating the attack surface...")
 
         # ── Feedback loop: feed chain results back into reasoning state ──
         if chain_results:
@@ -2164,6 +2182,8 @@ class AutoPwnPipeline:
                     f"Multi-stage chains progressed: {', '.join(completed.keys())}",
                     details="; ".join(f"{k}: {sum(1 for r in v if r)}/{len(v)} steps" for k, v in completed.items())
                 )
+            elif failed_steps:
+                print_error("All advanced reasoning chains failed. Retaining knowledge to avoid repeating these mistakes.")
 
     def _feed_exploitation_results_to_reasoning(self):
         """
