@@ -2274,13 +2274,15 @@ class AutoPwnPipeline:
             "php_tricks": self._exploit_php_tricks,
             "eval_injection": self._exploit_eval_injection,
             "file_upload": self._exploit_file_upload,
+            "race_condition": self._exploit_race_condition,
         }
         method = exploit_map.get(hypothesis)
         if not method:
             return False
         try:
-            method()
-            return True
+            # We must capture the return value of the method to know if it succeeded
+            result = method()
+            return bool(result)
         except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print_warning(f"  [Reasoning Plan] Hypothesis step '{hypothesis}' failed: {e}")
             return False
