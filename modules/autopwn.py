@@ -292,9 +292,6 @@ class AutoPwnPipeline:
 
             print_info(f"Discovered [bold green]{len(self.state['endpoints'])}[/bold green] Endpoints, [bold green]{len(self.state['forms'])}[/bold green] Forms, [bold green]{len(self.state['scripts'])}[/bold green] Scripts, [bold green]{len(self.state['parameters'])}[/bold green] Input Parameters.")
             
-            # 3b. DEEP CRAWL: Visit every discovered endpoint and analyze content
-            self._deep_crawl_endpoints()
-            
             # 4. Dummy Data Harvest (Form Interaction)
             self._harvest_form_cookies()
 
@@ -327,15 +324,20 @@ class AutoPwnPipeline:
             if h["status"] == 200:
                 self.narrator.speak_success(f"Sensitive Asset Found: {h['path']} (Size: {h['length']} bytes)")
                 self._log_step("Phase 1: Recon", f"Discovered sensitive file: {h['path']}", curl_cmd=f"curl -s {h['url']}")
-                # If .env or config file leaked, save to loot
-                if any(x in h["path"] for x in [".env", "config", "app.py", "backup", "flag"]):
-                    try:
-                        content = self.session.get(h["url"], timeout=15).text
+                # Download and analyze EVERY accessible file (not just .env/config)
+                try:
+                    content = self.session.get(h["url"], timeout=15).text
+                    # Skip if content is identical to root page (custom 404)
+                    if content.strip() != self.state.get("baseline_html", "").strip():
                         LootManager.save_source_file(self.target_url, h["path"], content)
                         self._check_and_store_flags(content, h["path"])
-                    except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-                        pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
-                        pass
+                        # Check if it looks like source code
+                        source_markers = ["<?php", "<?=", "import ", "def ", "function ", "require(", "include(", "SECRET", "FLAG"]
+                        if any(marker in content for marker in source_markers):
+                            self.state["leaked_source_files"][h["path"]] = content
+                            self.narrator.speak_action(f"Source code extracted from: {h['path']}")
+                except Exception:
+                    pass
 
         # 5. Dynamic Backup File Discovery
         # Generate backup paths from ALL discovered files and probe them
@@ -373,12 +375,17 @@ class AutoPwnPipeline:
                 flag_prefix=self.flag_prefix
             )
             
-            # Filter out false positives (same size as root page)
-            baseline_len = len(self.state.get("baseline_html", ""))
+            # Filter out false positives using CONTENT comparison, not just size
+            baseline_html = self.state.get("baseline_html", "").strip()
+            baseline_len = len(baseline_html)
             real_hits = []
             for bh in backup_hits:
-                # Skip if same length as root (likely custom 404)
-                if abs(bh["length"] - baseline_len) < 10:
+                bh_content = bh.get("content", "").strip()
+                # Skip if content is identical to root page (custom 404 returning 200)
+                if bh_content == baseline_html:
+                    continue
+                # Skip if empty
+                if not bh_content:
                     continue
                 real_hits.append(bh)
             
@@ -405,6 +412,9 @@ class AutoPwnPipeline:
                             self._check_and_store_flags(f, f"Backup Flag ({bh['path']})")
             else:
                 self.narrator.speak_recon("No backup files found via dynamic probing.")
+
+        # 6. DEEP CRAWL: Now that we have ALL endpoints (from ffuf, backup scan, etc.), crawl them
+        self._deep_crawl_endpoints()
 
     # =========================================================================
     # PHASE 1c: Deep Crawl - Visit all endpoints and analyze content
