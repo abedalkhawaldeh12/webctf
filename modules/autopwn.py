@@ -47,6 +47,7 @@ from modules.intelligence_engine import IntelligenceEngine
 from modules.ctf_reasoner import CTFReasoner
 from modules.thinking_engine import ThinkingEngine
 from modules.narrator_engine import NarratorEngine
+from modules.backup_scanner import probe_backup_files
 
 
 
@@ -331,6 +332,75 @@ class AutoPwnPipeline:
                     except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
                         pass  # TODO: Handle specific exceptions like requests.exceptions.RequestException
                         pass
+
+        # 5. Dynamic Backup File Discovery
+        # Generate backup paths from ALL discovered files and probe them
+        thinking_vulns = self.thinking_profile.get("vulnerabilities", [])
+        thinking_type = self.thinking_profile.get("challenge_type", "")
+        if "lfi" in thinking_vulns or thinking_type == "whitebox" or "backup" in self.challenge_hints.lower():
+            self.narrator.speak_thinking("The hint mentions backup files. I should try every possible backup extension on discovered files...")
+            
+            # Collect all discovered file paths (from endpoints, sensitive hits, ffuf results)
+            discovered_files = []
+            for ep in self.state["endpoints"]:
+                # Extract path from URL
+                from urllib.parse import urlparse
+                parsed_path = urlparse(ep).path.lstrip("/")
+                if parsed_path and "." in parsed_path:
+                    discovered_files.append(parsed_path)
+            for h in hits:
+                if h.get("path"):
+                    discovered_files.append(h["path"])
+            
+            # Always include common PHP files even if not discovered
+            for common in ["index.php", "config.php", "login.php", "admin.php", 
+                          "flag.php", "secret.php", "db.php", "database.php",
+                          "connect.php", "settings.php", "app.php", "functions.php",
+                          "auth.php", "api.php", "upload.php", "check.php"]:
+                if common not in discovered_files:
+                    discovered_files.append(common)
+            
+            self.narrator.speak_recon(f"Probing backup variants for {len(discovered_files)} discovered files...")
+            backup_hits = probe_backup_files(
+                self.target_url,
+                discovered_files,
+                session=self.session,
+                max_workers=15,
+                flag_prefix=self.flag_prefix
+            )
+            
+            # Filter out false positives (same size as root page)
+            baseline_len = len(self.state.get("baseline_html", ""))
+            real_hits = []
+            for bh in backup_hits:
+                # Skip if same length as root (likely custom 404)
+                if abs(bh["length"] - baseline_len) < 10:
+                    continue
+                real_hits.append(bh)
+            
+            if real_hits:
+                self.narrator.speak_success(f"Found {len(real_hits)} backup files!")
+                for bh in real_hits:
+                    self.narrator.speak_success(f"BACKUP FOUND: {bh['path']} ({bh['length']} bytes)")
+                    self._log_step("Phase 1: Backup Discovery", f"Backup file: {bh['path']}", curl_cmd=f"curl -s {bh['url']}")
+                    
+                    # Save content and check for flags
+                    content = bh.get("content", "")
+                    if content:
+                        LootManager.save_source_file(self.target_url, bh["path"], content)
+                        self._check_and_store_flags(content, f"Backup File ({bh['path']})")
+                        
+                        # Store as leaked source for credential analysis
+                        if bh.get("is_source"):
+                            self.state["leaked_source_files"][bh["path"]] = content
+                            self.narrator.speak_action(f"Extracted source code from backup: {bh['path']}")
+                    
+                    # Check for flags in the response
+                    if bh.get("flags"):
+                        for f in bh["flags"]:
+                            self._check_and_store_flags(f, f"Backup Flag ({bh['path']})")
+            else:
+                self.narrator.speak_recon("No backup files found via dynamic probing.")
 
     # =========================================================================
     # PHASE 1b: Dummy Data Harvest
